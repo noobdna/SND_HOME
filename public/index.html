@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SND@HOME | System Monitor</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="header">
+    <div class="logo">
+      <span class="logo-icon">⌂</span>
+      <span class="logo-text">SND<span class="logo-accent">@</span>HOME</span>
+    </div>
+    <div class="status-indicator" id="statusIndicator">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">接続中...</span>
+    </div>
+  </header>
+
+  <main class="dashboard">
+    <div id="errorBanner" class="error-banner" hidden></div>
+
+    <section class="card-grid">
+      <!-- CPU -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">CPU使用率</span>
+          <span class="card-value" id="cpuValue">--%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="cpuBar"></div>
+        </div>
+        <div class="card-sub" id="cpuCores">コア数: --</div>
+      </div>
+
+      <!-- Memory -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">メモリ使用率</span>
+          <span class="card-value" id="memValue">--%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="memBar"></div>
+        </div>
+        <div class="card-sub" id="memDetail">-- / -- </div>
+      </div>
+
+      <!-- Host Info -->
+      <div class="card card-info">
+        <div class="info-row">
+          <span class="info-label">ホスト名</span>
+          <span class="info-value" id="hostname">--</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">IPアドレス</span>
+          <span class="info-value" id="ipAddress">--</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">稼働時間</span>
+          <span class="info-value" id="uptime">--</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">最終更新</span>
+          <span class="info-value" id="lastUpdated">--</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>SND@HOME Monitoring Dashboard</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
