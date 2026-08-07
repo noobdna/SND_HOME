@@ -33,7 +33,32 @@ function createInitialState() {
   };
 }
 
+/**
+ * ドットパス表記(例: "disk.percent")でスナップショットから値を取り出す。
+ * 途中のプロパティが存在しない場合や snapshot / 中間値が null・undefined の場合も
+ * 例外を投げず undefined を返す — 「データなし」として扱われ、その回の評価は
+ * スキップされる(PHASE5_PLAN.md の Threshold Rules 「metric」欄を参照)。
+ * @param {object} snapshot
+ * @param {string} metricPath
+ * @returns {*} 解決した値、または undefined(未検出/型不正)
+ */
+function resolveMetric(snapshot, metricPath) {
+  if (typeof metricPath !== "string" || metricPath === "") {
+    return undefined;
+  }
+
+  let current = snapshot;
+  for (const key of metricPath.split(".")) {
+    if (current === null || current === undefined) {
+      return undefined;
+    }
+    current = current[key];
+  }
+  return current;
+}
+
 module.exports = {
   STATES,
   createInitialState,
+  resolveMetric,
 };
