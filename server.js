@@ -4,6 +4,7 @@ const express = require("express");
 const systemRoutes = require("./routes/system");
 const monitorRoutes = require("./routes/monitor");
 const { startMonitoring, stopMonitoring } = require("./monitor/monitorEngine");
+const { start: startAlerting, stop: stopAlerting } = require("./alerts/alertEngine");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,6 +29,9 @@ app.use("/api/monitor", monitorRoutes);
 
 const server = app.listen(PORT, () => {
   console.log(`SND@HOME server listening on port ${PORT}`);
+  // alertEngine は monitorEngine の 'update' イベントの購読者なので、最初のティックを
+  // 取りこぼさないよう、監視(ティック)を開始する前に購読を確立しておく。
+  startAlerting();
   startMonitoring();
 });
 
@@ -37,6 +41,7 @@ const server = app.listen(PORT, () => {
 
 function shutdown() {
   stopMonitoring();
+  stopAlerting();
   server.close(() => {
     process.exit(0);
   });

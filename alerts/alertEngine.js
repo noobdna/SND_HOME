@@ -77,11 +77,15 @@ class AlertEngine extends EventEmitter {
   /**
    * monitorEngine の 'update' イベント購読を開始する。
    * 既に購読中の場合は何もしない(二重登録防止 — monitorEngine.start() と同じ方針)。
+   * monitorEngine.start() が起動時に "Background polling started" をログ出力するのと
+   * 同じ運用可視性のため、購読開始時にログを1行出す(停止時は monitorEngine.stop() に
+   * ならいログを出さない)。
    */
   start() {
     if (this.listening) return;
     monitorEngine.on("update", this.handleUpdate);
     this.listening = true;
+    console.log("Alert engine started");
   }
 
   /**
