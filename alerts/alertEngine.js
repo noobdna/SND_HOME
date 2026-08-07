@@ -6,15 +6,16 @@
 // 同じ立ち位置)。
 //
 // Task 3.1 で購読の開始/停止と、有効なルールをループする骨組みを作った。
-// Task 3.2(このコミット)ではループの中身を実装: 各ルールについてスナップショットから
-// 値を取り出し、ruleEvaluator.evaluate() を呼び、返ってきた次のランタイム状態を
-// メモリ上に持続させる(PHASE5_PLAN.md「Duration」「Hysteresis」「Cooldown」節が言う
-// 「ルールの定義とは別物の、AlertEngine がルールIDごとに保持するランタイム状態」)。
-// 'alert' イベントの発行(notify/alert の活用)は Task 3.3 で追加する — 本タスクでは
-// evaluate() が返す notify/alert はまだ使わない。monitorEngine.js が既に EventEmitter
-// ベースの購読者パターンを確立しているため、AlertEngine 自身も将来 'alert' を
-// 発行する EventEmitter として組み立てておく(File Structure 図の
-// "AE -- emits 'alert' --> NR" に合わせた骨格)。
+// Task 3.2 でループの中身(値の取り出し・ruleEvaluator.evaluate() の呼び出し・
+// 次のランタイム状態のメモリ上への持続)を実装した(PHASE5_PLAN.md「Duration」
+// 「Hysteresis」「Cooldown」節が言う「ルールの定義とは別物の、AlertEngine が
+// ルールIDごとに保持するランタイム状態」)。
+// Task 3.3(このコミット)では evaluate() が返す notify/alert を活かし、
+// notify === true のティックで 'alert' イベントを発行する。monitorEngine.js が
+// 既に EventEmitter ベースの購読者パターンを確立しているため、AlertEngine 自身も
+// この 'alert' イベントの購読者(Task 3.4 の alertHistoryStore、Stage 4 の
+// notifierRegistry)を、このファイルを変更せずに追加できる
+// (File Structure 図の "AE -- emits 'alert' --> NR" に対応)。
 const EventEmitter = require("events");
 const monitorEngine = require("../monitor/monitorEngine");
 const ruleStore = require("./ruleStore");
@@ -38,6 +39,13 @@ class AlertEngine extends EventEmitter {
    * ランタイム状態(初見のルールなら createInitialState())を使って評価し、
    * 返ってきた nextState をランタイム状態に反映する。全ルールが同じ `now` を
    * 共有する(このティック内で評価がぶれないように、ループの外で一度だけ取得)。
+   *
+   * `notify === true` の場合(OK→FIRING・DOWN の cooldown 再通知・RECOVERING→OK)、
+   * `evaluate()` が返す `alert`(PHASE5_PLAN.md「Notification Plugins」節の
+   * ドキュメント通りの形)をそのまま 'alert' イベントとして発行する。ランタイム状態の
+   * 更新は notify の有無に関わらず常に行う — 通知は「発火するかどうか」の話であり、
+   * 状態遷移そのものとは独立している(例: DOWN→DOWN のクールダウン抑制中でも
+   * ランタイム状態は毎ティック持続させる必要がある)。
    * @param {object} snapshot - collectorRegistry.collectAll() が返した最新のスナップショット
    */
   handleUpdate(snapshot) {
@@ -51,8 +59,12 @@ class AlertEngine extends EventEmitter {
       }
 
       const currentState = this.runtimeStates.get(rule.id) ?? ruleEvaluator.createInitialState();
-      const { nextState } = ruleEvaluator.evaluate(rule, value, currentState, now);
+      const { nextState, notify, alert } = ruleEvaluator.evaluate(rule, value, currentState, now);
       this.runtimeStates.set(rule.id, nextState);
+
+      if (notify) {
+        this.emit("alert", alert);
+      }
     }
   }
 
@@ -81,8 +93,10 @@ const engine = new AlertEngine();
 module.exports = {
   start: () => engine.start(),
   stop: () => engine.stop(),
-  // 将来の購読者(alertHistoryStore, notifierRegistry 等)向けのフック。
-  // 現時点では何も emit() しない(Task 3.3 で 'alert' イベントを追加する)。
+  // 'alert' イベントの購読/解除。ペイロードは PHASE5_PLAN.md「Notification Plugins」節の
+  // 形(alertId/ruleId/ruleName/metric/value/operator/threshold/severity/state/
+  // previousState/message/timestamp)。将来の購読者は alertHistoryStore(Task 3.4/3.5)、
+  // notifierRegistry(Stage 4)。
   on: (eventName, listener) => engine.on(eventName, listener),
   off: (eventName, listener) => engine.off(eventName, listener),
 };
