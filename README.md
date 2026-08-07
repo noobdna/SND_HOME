@@ -195,7 +195,19 @@ npm install
 npm start
 ```
 
-The server listens on port `3000` by default. Override it with the `PORT` environment variable:
+Environment variables are loaded from a `.env` file via [`dotenv`](https://www.npmjs.com/package/dotenv) if one exists — copy `.env.example` to get started:
+
+```bash
+cp .env.example .env
+```
+
+No `.env` file is required to run the app; every variable has a sensible default. Currently supported:
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | Port the Express server listens on |
+
+You can also override any variable inline without a `.env` file:
 
 ```bash
 PORT=4000 npm start

@@ -1,4 +1,5 @@
 // server.js
+require("dotenv").config();
 const express = require("express");
 const systemRoutes = require("./routes/system");
 const monitorRoutes = require("./routes/monitor");
