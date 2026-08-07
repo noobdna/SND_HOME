@@ -181,12 +181,72 @@ function evaluateFromFiring(rule, value, state, now) {
 }
 
 /**
+ * `state.state === STATES.DOWN` から始まる1ティック分の評価(Task 2.6)。
+ * `DOWN` は定常状態(steady state)— まだブリーチが続いている限りここに留まり続け、
+ * `cooldown` 秒ごとにのみ再通知する(PHASE5_PLAN.md「Cooldown」節):
+ *   - DOWN → DOWN、まだブリーチ中かつ `now - lastNotifiedAt >= cooldown` 秒 → 再通知あり
+ *     (「まだ落ちている」通知。`lastNotifiedAt` を更新するのみ — Cooldown 節の
+ *     「状態自体はクールダウン駆動の再通知では変化しない」の通り、`state` は `DOWN` のまま)
+ *   - DOWN → DOWN、まだブリーチ中だが cooldown 未経過 → 抑制(通知なし)
+ * `alertId`/`ruleId` などインシデントを一意に紐づけるフィールドは `FIRING` 遷移時に
+ * 刻んだものをそのまま引き継ぐ(Duplicate Suppression 節 — 同一インシデントの
+ * 「開始」「継続」「解消」を1つの `alertId` の下でスレッドとして相関させるため)。
+ * `alert.timestamp` はこの再通知そのものが発生した時刻(このティックの `now`)であり、
+ * `alertId` に埋め込まれた `incidentStartedAt` とは意図的に別物。
+ *
+ * ブリーチが解消している場合(`clearThreshold` を下回った)の `DOWN → RECOVERING` 遷移は
+ * Task 2.7 の範囲 — `evaluateFromFiring` と同じ理由で、未対応として明示的に例外を投げる。
+ *
+ * @returns {{ nextState: object, notify: boolean, alert?: object }}
+ * @throws {Error} このティックでブリーチが解消している場合(Task 2.7 で解禁予定)
+ */
+function evaluateFromDown(rule, value, state, now) {
+  const breached = compare(value, rule.operator, rule.threshold);
+
+  if (!breached) {
+    throw new Error(
+      "evaluate() does not yet support DOWN clearing below clearThreshold (added in Task 2.7)"
+    );
+  }
+
+  const cooldownMs = rule.cooldown * 1000;
+  const dueForRenotify = now - state.lastNotifiedAt >= cooldownMs;
+
+  if (!dueForRenotify) {
+    return {
+      nextState: { ...state },
+      notify: false,
+    };
+  }
+
+  const nextState = { ...state, lastNotifiedAt: now };
+
+  const alert = {
+    alertId: state.alertId,
+    ruleId: rule.id,
+    ruleName: rule.name,
+    metric: rule.metric,
+    value,
+    operator: rule.operator,
+    threshold: rule.threshold,
+    severity: rule.severity,
+    state: STATES.DOWN,
+    previousState: STATES.DOWN,
+    message: `${rule.name} is still DOWN: ${rule.metric} = ${value} (threshold ${rule.operator} ${rule.threshold})`,
+    timestamp: new Date(now).toISOString(),
+  };
+
+  return { nextState, notify: true, alert };
+}
+
+/**
  * ルール1件を1ティック分評価し、次のランタイム状態を返す(純粋関数、I/Oなし)。
  * PHASE5_PLAN.md の「State Machine」節・Transition table に準拠。
  *
- * 現時点(Task 2.4〜2.5)では `state.state` が `OK` または `FIRING` の場合の遷移のみを
- * 実装している。詳細は `evaluateFromOk` / `evaluateFromFiring` の JSDoc を参照。
- * `DOWN`/`RECOVERING` から始まる遷移は Task 2.6〜2.7 で追加される。
+ * 現時点(Task 2.4〜2.6)では `state.state` が `OK`・`FIRING`・`DOWN` の場合の遷移のみを
+ * 実装している。詳細は `evaluateFromOk` / `evaluateFromFiring` / `evaluateFromDown` の
+ * JSDoc を参照。`RECOVERING` から始まる遷移、および `FIRING`/`DOWN` でこのティック中に
+ * ブリーチが解消しているケースは Task 2.7 で追加される。
  *
  * `value` が `undefined`(resolveMetric が「データなし」を返した場合)を渡すかどうかは
  * 呼び出し元の責務 — 本来はそのティックの評価自体をスキップすべきだが、万一そのまま
@@ -198,8 +258,8 @@ function evaluateFromFiring(rule, value, state, now) {
  * @param {object} state - このルールの現在のランタイム状態
  * @param {number} now - 現在時刻(epoch ms。通常は `Date.now()`)
  * @returns {{ nextState: object, notify: boolean, alert?: object }}
- * @throws {Error} `state.state` が `DOWN`/`RECOVERING` の場合(Task 2.6〜2.7 で解禁予定)、
- *   または `FIRING` でこのティック中にブリーチが解消している場合(同上)
+ * @throws {Error} `state.state` が `RECOVERING` の場合(Task 2.7 で解禁予定)、
+ *   または `FIRING`/`DOWN` でこのティック中にブリーチが解消している場合(同上)
  */
 function evaluate(rule, value, state, now) {
   if (state.state === STATES.OK) {
@@ -210,8 +270,12 @@ function evaluate(rule, value, state, now) {
     return evaluateFromFiring(rule, value, state, now);
   }
 
+  if (state.state === STATES.DOWN) {
+    return evaluateFromDown(rule, value, state, now);
+  }
+
   throw new Error(
-    `evaluate() does not yet support transitions from state "${state.state}" (added in Task 2.6-2.7)`
+    `evaluate() does not yet support transitions from state "${state.state}" (added in Task 2.7)`
   );
 }
 
