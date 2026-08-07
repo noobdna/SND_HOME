@@ -1,7 +1,8 @@
 // alerts/ruleStore.js
-// アラートルールのスキーマ定義・バリデーション・インメモリCRUD。
-// ファイル永続化は後続タスク(1.3)で本ファイルに追加する。
+// アラートルールのスキーマ定義・バリデーション・インメモリCRUD・JSON永続化。
 // スキーマ・遷移ロジックの詳細は PHASE5_PLAN.md の「Alert Engine」セクションを参照。
+const fs = require("fs");
+const path = require("path");
 
 const ALLOWED_OPERATORS = [">", ">=", "<", "<=", "==", "!="];
 
@@ -113,7 +114,7 @@ function normalizeRule(rule) {
 }
 
 // ---------------------------------------------------------
-// インメモリCRUD(ファイル永続化は Task 1.3 で追加)
+// インメモリCRUD + JSON永続化
 // ---------------------------------------------------------
 
 class RuleValidationError extends Error {
@@ -166,6 +167,7 @@ function create(rule) {
 
   const normalized = normalizeRule(rule);
   rules.set(normalized.id, normalized);
+  persist();
   return cloneRule(normalized);
 }
 
@@ -214,6 +216,7 @@ function update(id, changes) {
 
   const normalized = normalizeRule(merged);
   rules.set(id, normalized);
+  persist();
   return cloneRule(normalized);
 }
 
@@ -227,13 +230,110 @@ function remove(id) {
     throw new RuleNotFoundError(id);
   }
   rules.delete(id);
+  persist();
 }
 
 /**
- * 全ルールを消去する(テスト用途、および Task 1.3 でのファイル再読込用途)。
+ * 全ルールを消去する(インメモリのみ・ディスクには書き込まない)。
+ * テストでの状態リセット、および load() が再読込前に内部状態を
+ * 空にするために使う内部的な操作であり、ユーザー操作の結果ではないため
+ * persist() は呼ばない。
  */
 function clear() {
   rules.clear();
+}
+
+// ---------------------------------------------------------
+// JSON永続化
+// ---------------------------------------------------------
+// ルール定義はユーザーが設定する構成情報であり、メトリクス履歴と違って
+// 再起動のたびに失われてよいものではない。本格的なDB導入(Milestone 2の
+// SQLite化)より前に、軽量な書き込みスルー方式のJSONファイルで永続化する。
+
+const DEFAULT_RULES_PATH = path.join(__dirname, "..", "data", "alertRules.json");
+
+/**
+ * 永続化ファイルのパスを返す。ALERTS_RULES_PATH 環境変数があればそれを優先する。
+ * @returns {string}
+ */
+function getRulesPath() {
+  return process.env.ALERTS_RULES_PATH || DEFAULT_RULES_PATH;
+}
+
+/**
+ * 現在のインメモリ状態をJSONファイルへ書き込む(内部関数、CRUDから呼ばれる)。
+ * 書き込みに失敗した場合は例外を投げ、呼び出し元のCRUD操作へ伝播する。
+ * インメモリの状態はこの時点で既に更新済みであり、書き込み失敗時のロール
+ * バックは行わない(ホームラボ規模の用途では、失敗時に呼び出し元が操作を
+ * 再試行すれば十分と判断し、トランザクション的な複雑さは導入しない)。
+ * @param {string} [filePath]
+ */
+function persist(filePath = getRulesPath()) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const data = Array.from(rules.values());
+  fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+}
+
+/**
+ * JSONファイルからルールを読み込み、インメモリ状態を置き換える。
+ * ファイルが存在しない場合は何もしない(初回起動など)。
+ * ファイルが壊れている・個々のルールがスキーマ違反の場合はそのルールだけを
+ * スキップして警告をログに出し、アプリ全体はクラッシュさせない
+ * (collectors/networkCollector.js 等、既存コードのグレースフルデグレード
+ * の方針に合わせている)。
+ * @param {string} [filePath]
+ * @returns {{ loaded: number, skipped: number }}
+ */
+function load(filePath = getRulesPath()) {
+  clear();
+
+  if (!fs.existsSync(filePath)) {
+    return { loaded: 0, skipped: 0 };
+  }
+
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    console.warn(`[ruleStore] Failed to read ${filePath}: ${error.message}`);
+    return { loaded: 0, skipped: 0 };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    console.warn(`[ruleStore] Failed to parse ${filePath} as JSON: ${error.message}`);
+    return { loaded: 0, skipped: 0 };
+  }
+
+  if (!Array.isArray(parsed)) {
+    console.warn(`[ruleStore] ${filePath} does not contain a JSON array; ignoring`);
+    return { loaded: 0, skipped: 0 };
+  }
+
+  let loaded = 0;
+  let skipped = 0;
+  for (const rule of parsed) {
+    const errors = validateRule(rule);
+    if (errors.length > 0) {
+      console.warn(
+        `[ruleStore] Skipping invalid rule "${rule && rule.id}" from ${filePath}: ${errors.join("; ")}`
+      );
+      skipped++;
+      continue;
+    }
+    if (rules.has(rule.id)) {
+      console.warn(`[ruleStore] Skipping duplicate rule id "${rule.id}" from ${filePath}`);
+      skipped++;
+      continue;
+    }
+    rules.set(rule.id, normalizeRule(rule));
+    loaded++;
+  }
+
+  return { loaded, skipped };
 }
 
 module.exports = {
@@ -251,4 +351,7 @@ module.exports = {
   update,
   remove,
   clear,
+  load,
+  persist,
+  getRulesPath,
 };
