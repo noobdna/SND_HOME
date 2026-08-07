@@ -2,7 +2,14 @@
 // 通知プラグインのレジストリ。discord/slack/email/webhook等の通知チャンネルを
 // 1ファイル1プラグインとして register() で追加できるようにする
 // (monitor/collectorRegistry.js と同じプラグインパターン — alertEngine 側の
-// 変更は不要)。プラグインの実体(notifiers/*.js)は Stage 5 で追加する。
+// 変更は不要)。プラグインの実体(notifiers/*.js)は Stage 5 で追加した。
+// collectorRegistry.js が register(cpuCollector) 等を自身のモジュール読み込み時に
+// 固定で行っているのと同じ考え方で、本ファイルの末尾で4つの notifiers/*.js を
+// require して register() する — 「notifier plugins」タスクの成果物が実際に
+// 到達可能(register済み)であることまでを Stage 5 のスコープに含めた判断。
+// PHASE5_PLAN.md のタスク一覧には Stage 4/6 のどこにも明示的な「wire notifiers
+// into notifierRegistry」タスクが無いため、collectorRegistry.js の既存パターンに
+// ならい、プラグインファイルを作るタスク(5.1〜5.4)自体にこの配線を含めた。
 //
 // プラグインは { name: string, configured: () => boolean, notify: (alert) => Promise<void> }
 // の形を持つこと(PHASE5_PLAN.md「Notification Plugins」節)。
@@ -80,5 +87,15 @@ async function dispatch(alert) {
     })
   );
 }
+
+const discordNotifier = require("../notifiers/discordNotifier");
+const slackNotifier = require("../notifiers/slackNotifier");
+const emailNotifier = require("../notifiers/emailNotifier");
+const webhookNotifier = require("../notifiers/webhookNotifier");
+
+register(discordNotifier);
+register(slackNotifier);
+register(emailNotifier);
+register(webhookNotifier);
 
 module.exports = { register, list, dispatch };
