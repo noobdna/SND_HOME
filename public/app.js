@@ -18,6 +18,10 @@ const elements = {
   memBar: document.getElementById("memBar"),
   memDetail: document.getElementById("memDetail"),
 
+  diskValue: document.getElementById("diskValue"),
+  diskBar: document.getElementById("diskBar"),
+  diskDetail: document.getElementById("diskDetail"),
+
   hostname: document.getElementById("hostname"),
   ipAddress: document.getElementById("ipAddress"),
   uptime: document.getElementById("uptime"),
@@ -134,6 +138,16 @@ function renderSystemInfo(data) {
   elements.memBar.style.width = `${Math.min(memPercent, 100)}%`;
   applyBarColor(elements.memBar, memPercent);
   elements.memDetail.textContent = `${formatBytes(memUsed)} / ${formatBytes(memTotal)}`;
+
+  // Disk
+  const diskPercent = data.disk && typeof data.disk.percent === "number" ? data.disk.percent : 0;
+  const diskUsed = data.disk ? data.disk.used : null;
+  const diskTotal = data.disk ? data.disk.total : null;
+
+  elements.diskValue.textContent = `${diskPercent.toFixed(1)}%`;
+  elements.diskBar.style.width = `${Math.min(diskPercent, 100)}%`;
+  applyBarColor(elements.diskBar, diskPercent);
+  elements.diskDetail.textContent = `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`;
 
   // Host Info
   elements.hostname.textContent = data.hostname || "--";
