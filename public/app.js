@@ -3,6 +3,7 @@
 
 const REFRESH_INTERVAL_MS = 3000;
 const API_ENDPOINT = "/api/system";
+const HISTORY_ENDPOINT = "/api/system/history";
 
 // DOM要素の参照をキャッシュ
 const elements = {
@@ -26,6 +27,22 @@ const elements = {
   ipAddress: document.getElementById("ipAddress"),
   uptime: document.getElementById("uptime"),
   lastUpdated: document.getElementById("lastUpdated"),
+
+  cpuChart: document.getElementById("cpuChart"),
+  cpuHistoryValue: document.getElementById("cpuHistoryValue"),
+  memChart: document.getElementById("memChart"),
+  memHistoryValue: document.getElementById("memHistoryValue"),
+  diskChart: document.getElementById("diskChart"),
+  diskHistoryValue: document.getElementById("diskHistoryValue"),
+  netChart: document.getElementById("netChart"),
+  netHistoryValue: document.getElementById("netHistoryValue"),
+};
+
+// チャートの色はCSSカスタムプロパティ(テーマ)から取得し、既存の配色と統一する
+const chartColors = {
+  accent: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim(),
+  green: getComputedStyle(document.documentElement).getPropertyValue("--green").trim(),
+  border: getComputedStyle(document.documentElement).getPropertyValue("--border-color").trim(),
 };
 
 /**
@@ -157,6 +174,156 @@ function renderSystemInfo(data) {
 }
 
 /**
+ * Canvas上に1本以上の折れ線グラフを描画する軽量チャート関数。
+ * 外部ライブラリを使わず、Canvas 2D APIのみで実装する。
+ * @param {HTMLCanvasElement} canvas
+ * @param {Array<{values: (number|null)[], color: string}>} series 同じ長さの系列を複数描画可能
+ * @param {{min?: number, max?: number}} [options] 省略時はデータの最小/最大値を使う
+ */
+function drawLineChart(canvas, series, options = {}) {
+  const ctx = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  ctx.clearRect(0, 0, width, height);
+
+  const allValues = series
+    .flatMap((s) => s.values)
+    .filter((v) => typeof v === "number" && !isNaN(v));
+  if (allValues.length < 2) return;
+
+  const min = typeof options.min === "number" ? options.min : Math.min(...allValues);
+  let max = typeof options.max === "number" ? options.max : Math.max(...allValues);
+  if (max <= min) max = min + 1;
+  const range = max - min;
+
+  // 背景グリッド線(25%刻み)
+  ctx.strokeStyle = chartColors.border;
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = (height / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  series.forEach(({ values, color }) => {
+    const stepX = width / (values.length - 1);
+    let started = false;
+
+    ctx.beginPath();
+    values.forEach((v, i) => {
+      if (typeof v !== "number" || isNaN(v)) {
+        started = false;
+        return;
+      }
+      const x = i * stepX;
+      const clamped = Math.min(Math.max(v, min), max);
+      const y = height - ((clamped - min) / range) * height;
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+    ctx.stroke();
+  });
+}
+
+/**
+ * バイト/秒を人間が読みやすい単位の転送速度文字列に変換する
+ */
+function formatRate(bytesPerSec) {
+  if (typeof bytesPerSec !== "number" || isNaN(bytesPerSec)) return "--";
+  return `${formatBytes(bytesPerSec)}/s`;
+}
+
+/**
+ * 累積送受信バイト数の履歴から、区間ごとの転送速度(bytes/sec)を算出する。
+ * 系列の先頭は差分が取れないためnullとする。カウンタリセット(再起動等)で
+ * 差分が負になった場合は0として扱う。
+ */
+function computeNetworkRates(history) {
+  const rxRates = [null];
+  const txRates = [null];
+
+  for (let i = 1; i < history.length; i++) {
+    const prevNet = (history[i - 1] && history[i - 1].network) || {};
+    const currNet = (history[i] && history[i].network) || {};
+    const dtSec = (new Date(history[i].timestamp) - new Date(history[i - 1].timestamp)) / 1000;
+
+    if (typeof prevNet.rxBytes === "number" && typeof currNet.rxBytes === "number" && dtSec > 0) {
+      rxRates.push(Math.max(0, (currNet.rxBytes - prevNet.rxBytes) / dtSec));
+    } else {
+      rxRates.push(null);
+    }
+
+    if (typeof prevNet.txBytes === "number" && typeof currNet.txBytes === "number" && dtSec > 0) {
+      txRates.push(Math.max(0, (currNet.txBytes - prevNet.txBytes) / dtSec));
+    } else {
+      txRates.push(null);
+    }
+  }
+
+  return { rxRates, txRates, latestRx: rxRates[rxRates.length - 1], latestTx: txRates[txRates.length - 1] };
+}
+
+/**
+ * 履歴データを取得してCPU/メモリ/ディスク/ネットワークの4チャートを再描画する
+ */
+function renderCharts(history) {
+  if (!Array.isArray(history) || history.length === 0) return;
+
+  const cpuValues = history.map((h) => (h.cpu ? h.cpu.usage : null));
+  const memValues = history.map((h) => (h.memory ? h.memory.percent : null));
+  const diskValues = history.map((h) => (h.disk ? h.disk.percent : null));
+
+  drawLineChart(elements.cpuChart, [{ values: cpuValues, color: chartColors.accent }], { min: 0, max: 100 });
+  drawLineChart(elements.memChart, [{ values: memValues, color: chartColors.accent }], { min: 0, max: 100 });
+  drawLineChart(elements.diskChart, [{ values: diskValues, color: chartColors.accent }], { min: 0, max: 100 });
+
+  const latestCpu = cpuValues[cpuValues.length - 1];
+  const latestMem = memValues[memValues.length - 1];
+  const latestDisk = diskValues[diskValues.length - 1];
+  elements.cpuHistoryValue.textContent = typeof latestCpu === "number" ? `${latestCpu.toFixed(1)}%` : "--%";
+  elements.memHistoryValue.textContent = typeof latestMem === "number" ? `${latestMem.toFixed(1)}%` : "--%";
+  elements.diskHistoryValue.textContent = typeof latestDisk === "number" ? `${latestDisk.toFixed(1)}%` : "--%";
+
+  const { rxRates, txRates, latestRx, latestTx } = computeNetworkRates(history);
+  drawLineChart(
+    elements.netChart,
+    [
+      { values: rxRates, color: chartColors.accent },
+      { values: txRates, color: chartColors.green },
+    ],
+    { min: 0 }
+  );
+  elements.netHistoryValue.textContent = `↓ ${formatRate(latestRx)}  ↑ ${formatRate(latestTx)}`;
+}
+
+/**
+ * /api/system/history を取得してチャートを更新する。
+ * 取得失敗時は致命的エラーではないため、既存のチャート表示を維持して黙って諦める。
+ */
+async function fetchHistory() {
+  try {
+    const response = await fetch(HISTORY_ENDPOINT);
+    if (!response.ok) return;
+
+    const json = await response.json();
+    if (json.status !== "ok") return;
+
+    renderCharts(json.data);
+  } catch (error) {
+    // ネットワーク断などでも致命的ではないため無視する
+  }
+}
+
+/**
  * /api/system を取得してダッシュボードを更新する
  */
 async function fetchSystemInfo() {
@@ -185,3 +352,6 @@ async function fetchSystemInfo() {
 // 初回実行 + 3秒ごとの自動更新
 fetchSystemInfo();
 setInterval(fetchSystemInfo, REFRESH_INTERVAL_MS);
+
+fetchHistory();
+setInterval(fetchHistory, REFRESH_INTERVAL_MS);

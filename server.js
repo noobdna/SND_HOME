@@ -6,6 +6,7 @@ const {
   stopMonitoring,
   getLatestSystemInfo,
   getStatus,
+  getHistory,
 } = require("./monitor/monitorEngine");
 
 const app = express();
@@ -67,6 +68,27 @@ app.get("/api/system/latest", (req, res) => {
 app.get("/api/monitor/status", (req, res) => {
   try {
     res.json(getStatus());
+  } catch (error) {
+    res.status(500).json({
+      status: "error",
+      message: error.message || "Unknown error",
+    });
+  }
+});
+
+// 履歴データ(トレンドチャート用に間引かれたメトリクスの配列)を返す。
+// ?limit= で件数を指定可能(既定120件 = 監視間隔5秒なら直近10分)。
+app.get("/api/system/history", (req, res) => {
+  try {
+    const limitParam = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 120;
+    const data = getHistory({ limit });
+    res.json({
+      status: "ok",
+      count: data.length,
+      interval: getStatus().interval,
+      data,
+    });
   } catch (error) {
     res.status(500).json({
       status: "error",

@@ -3,8 +3,11 @@
 // 最新値のみをメモリにキャッシュする。内部はEventEmitterによる
 // イベント駆動(update/error)で動作し、将来の購読者(通知・ロギング等)を
 // このファイルを変更せずに追加できる。
+// 収集に成功するたびhistoryStoreにも記録し、トレンドチャートや
+// 将来のアラート評価(閾値監視等)が履歴を参照できるようにする。
 const EventEmitter = require("events");
 const { collectAll } = require("./collectorRegistry");
+const historyStore = require("./historyStore");
 
 const DEFAULT_INTERVAL_MS = 5000;
 
@@ -28,6 +31,7 @@ class MonitorEngine extends EventEmitter {
       const data = await collectAll();
       this.latestSystemInfo = data;
       this.lastUpdated = new Date().toISOString();
+      historyStore.record(data);
       console.log("System cache updated");
       this.emit("update", data);
     } catch (error) {
@@ -83,6 +87,7 @@ module.exports = {
   stopMonitoring: () => engine.stop(),
   getLatestSystemInfo: () => engine.getLatestSystemInfo(),
   getStatus: () => engine.getStatus(),
+  getHistory: (options) => historyStore.getHistory(options),
   // 将来の購読者(EventCollector, WebSocket通知層等)向けのフック
   on: (eventName, listener) => engine.on(eventName, listener),
   off: (eventName, listener) => engine.off(eventName, listener),

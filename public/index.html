@@ -78,6 +78,47 @@
         </div>
       </div>
     </section>
+
+    <section class="chart-section">
+      <h2 class="section-title">履歴(直近10分)</h2>
+      <div class="chart-grid">
+        <div class="card chart-card">
+          <div class="card-header">
+            <span class="card-title">CPU使用率の推移</span>
+            <span class="card-value" id="cpuHistoryValue">--%</span>
+          </div>
+          <canvas class="chart-canvas" id="cpuChart" width="640" height="120"></canvas>
+        </div>
+
+        <div class="card chart-card">
+          <div class="card-header">
+            <span class="card-title">メモリ使用率の推移</span>
+            <span class="card-value" id="memHistoryValue">--%</span>
+          </div>
+          <canvas class="chart-canvas" id="memChart" width="640" height="120"></canvas>
+        </div>
+
+        <div class="card chart-card">
+          <div class="card-header">
+            <span class="card-title">ディスク使用率の推移</span>
+            <span class="card-value" id="diskHistoryValue">--%</span>
+          </div>
+          <canvas class="chart-canvas" id="diskChart" width="640" height="120"></canvas>
+        </div>
+
+        <div class="card chart-card">
+          <div class="card-header">
+            <span class="card-title">ネットワーク転送速度</span>
+            <span class="card-value" id="netHistoryValue">--</span>
+          </div>
+          <canvas class="chart-canvas" id="netChart" width="640" height="120"></canvas>
+          <div class="chart-legend">
+            <span class="legend-item"><span class="legend-dot legend-rx"></span>受信</span>
+            <span class="legend-item"><span class="legend-dot legend-tx"></span>送信</span>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer class="footer">

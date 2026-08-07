@@ -194,6 +194,55 @@ body {
   font-family: "Consolas", "SFMono-Regular", monospace;
 }
 
+/* Chart Section */
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 32px 0 16px;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.chart-canvas {
+  width: 100%;
+  height: 120px;
+  display: block;
+  margin-top: 4px;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.legend-rx {
+  background-color: var(--accent);
+}
+
+.legend-tx {
+  background-color: var(--green);
+}
+
 /* Footer */
 .footer {
   text-align: center;
