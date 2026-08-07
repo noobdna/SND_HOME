@@ -57,8 +57,42 @@ function resolveMetric(snapshot, metricPath) {
   return current;
 }
 
+/**
+ * value と threshold を operator で比較する。
+ * "==" / "!=" は厳密等価(===/!==)で判定する — メトリクス値は数値である前提のため、
+ * 型強制による意図しない一致(例: "90" == 90)を避ける。
+ * value が undefined/NaN の場合(未検出メトリクス)の扱いは呼び出し元の責務
+ * (「データなし」としてそのティックの評価自体をスキップする — resolveMetric の
+ * JSDoc、および PHASE5_PLAN.md の Threshold Rules 「metric」欄を参照)。
+ * @param {number} value
+ * @param {">"|">="|"<"|"<="|"=="|"!="} operator
+ * @param {number} threshold
+ * @returns {boolean}
+ * @throws {Error} operator が未知の場合(RuleStore の validateRule() が事前に
+ *   ALLOWED_OPERATORS で弾いているため、通常到達しない)
+ */
+function compare(value, operator, threshold) {
+  switch (operator) {
+    case ">":
+      return value > threshold;
+    case ">=":
+      return value >= threshold;
+    case "<":
+      return value < threshold;
+    case "<=":
+      return value <= threshold;
+    case "==":
+      return value === threshold;
+    case "!=":
+      return value !== threshold;
+    default:
+      throw new Error(`Unknown operator: ${operator}`);
+  }
+}
+
 module.exports = {
   STATES,
   createInitialState,
   resolveMetric,
+  compare,
 };
