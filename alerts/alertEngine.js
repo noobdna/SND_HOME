@@ -10,16 +10,22 @@
 // 次のランタイム状態のメモリ上への持続)を実装した(PHASE5_PLAN.md「Duration」
 // 「Hysteresis」「Cooldown」節が言う「ルールの定義とは別物の、AlertEngine が
 // ルールIDごとに保持するランタイム状態」)。
-// Task 3.3(このコミット)では evaluate() が返す notify/alert を活かし、
-// notify === true のティックで 'alert' イベントを発行する。monitorEngine.js が
-// 既に EventEmitter ベースの購読者パターンを確立しているため、AlertEngine 自身も
-// この 'alert' イベントの購読者(Task 3.4 の alertHistoryStore、Stage 4 の
-// notifierRegistry)を、このファイルを変更せずに追加できる
-// (File Structure 図の "AE -- emits 'alert' --> NR" に対応)。
+// Task 3.3 では evaluate() が返す notify/alert を活かし、notify === true の
+// ティックで 'alert' イベントを発行するようにした。Task 3.4 で alertHistoryStore
+// (状態遷移イベントの ring buffer)を独立したモジュールとして作った — この時点では
+// alertEngine.js を一切知らない、単体で完結したストアだった。
+// Task 3.5(このコミット)では、その alertHistoryStore を AlertEngine 自身の 'alert'
+// イベントの購読者として配線する: `engine.on("alert", alertHistoryStore.record)`。
+// これにより alertHistoryStore は「発行されたすべての 'alert' イベントを記録する」
+// 最初の購読者になる — Stage 4 の notifierRegistry も同じ 'alert' イベントに
+// 対して並行して購読を追加するだけでよく、このファイルの他の部分は変更不要
+// (File Structure 図の "AE -- records every transition --> AHS" /
+// "AE -- emits 'alert' --> NR" の2本の矢印に対応)。
 const EventEmitter = require("events");
 const monitorEngine = require("../monitor/monitorEngine");
 const ruleStore = require("./ruleStore");
 const ruleEvaluator = require("./ruleEvaluator");
+const alertHistoryStore = require("./alertHistoryStore");
 
 class AlertEngine extends EventEmitter {
   constructor() {
@@ -90,13 +96,20 @@ class AlertEngine extends EventEmitter {
 
 const engine = new AlertEngine();
 
+// alertHistoryStore を最初の 'alert' 購読者として配線する。monitorEngine.js が
+// collectorRegistry の register() 呼び出しをモジュール読み込み時に固定で行っている
+// のと同じ考え方 — この購読は start()/stop() の対象ではなく、プロセスの寿命全体で
+// 常に有効(handleUpdate() 自体が monitorEngine の 'update' 購読中にしか呼ばれない
+// ため、実質的には start() 中にしか 'alert' は発行されないが、購読自体は無条件)。
+engine.on("alert", alertHistoryStore.record);
+
 module.exports = {
   start: () => engine.start(),
   stop: () => engine.stop(),
   // 'alert' イベントの購読/解除。ペイロードは PHASE5_PLAN.md「Notification Plugins」節の
   // 形(alertId/ruleId/ruleName/metric/value/operator/threshold/severity/state/
-  // previousState/message/timestamp)。将来の購読者は alertHistoryStore(Task 3.4/3.5)、
-  // notifierRegistry(Stage 4)。
+  // previousState/message/timestamp)。alertHistoryStore は上ですでに購読済み。
+  // 将来の購読者は notifierRegistry(Stage 4)。
   on: (eventName, listener) => engine.on(eventName, listener),
   off: (eventName, listener) => engine.off(eventName, listener),
 };
