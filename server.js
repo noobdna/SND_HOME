@@ -1,7 +1,8 @@
 // server.js
 const express = require("express");
 const systemRoutes = require("./routes/system");
-const { startMonitoring, stopMonitoring, getStatus } = require("./monitor/monitorEngine");
+const monitorRoutes = require("./routes/monitor");
+const { startMonitoring, stopMonitoring } = require("./monitor/monitorEngine");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -18,18 +19,7 @@ app.get("/", (req, res) => {
 });
 
 app.use("/api", systemRoutes);
-
-// 監視エンジン自体の稼働状態を返す
-app.get("/api/monitor/status", (req, res) => {
-  try {
-    res.json(getStatus());
-  } catch (error) {
-    res.status(500).json({
-      status: "error",
-      message: error.message || "Unknown error",
-    });
-  }
-});
+app.use("/api/monitor", monitorRoutes);
 
 // ---------------------------------------------------------
 // サーバー起動

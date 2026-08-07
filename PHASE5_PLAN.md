@@ -401,7 +401,7 @@ Every task is scoped to 15–30 minutes. Work through stages in order — each s
 
 ### Stage 0 — Prerequisites
 - [x] 0.1 Extract existing `/api/system*` and `/api/health` routes into `routes/system.js` *(20 min)* — done: `routes/system.js` created as an `express.Router()` mounted at `/api` in `server.js`; `/api/monitor/status` intentionally left in place (that's task 0.2). Verified via manual curl pass against all 4 moved routes plus `/`, `/api/monitor/status`, and a 404 case — all identical to pre-refactor behavior. No automated test suite exists yet (unchanged from the original audit; that work is still pending in Milestone 1/2).
-- [ ] 0.2 Extract `/api/monitor/status` into `routes/monitor.js`; mount both routers in `server.js` *(15 min)*
+- [x] 0.2 Extract `/api/monitor/status` into `routes/monitor.js`; mount both routers in `server.js` *(15 min)* — done: `routes/monitor.js` created as an `express.Router()` mounted at `/api/monitor`; `server.js` no longer imports `getStatus` directly. Verified via manual curl pass: `/api/monitor/status` unchanged, `/api/monitor` (no sub-path) correctly 404s, all other routes still behave as before. `server.js` is now purely composition (routers + lifecycle), 46 lines.
 - [ ] 0.3 Install `dotenv`, add `require('dotenv').config()` to `server.js`, create initial `.env.example` with just `PORT` *(15 min)*
 
 ### Stage 1 — Rule data model & store
