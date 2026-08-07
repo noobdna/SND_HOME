@@ -17,15 +17,19 @@
 // Task 3.5(このコミット)では、その alertHistoryStore を AlertEngine 自身の 'alert'
 // イベントの購読者として配線する: `engine.on("alert", alertHistoryStore.record)`。
 // これにより alertHistoryStore は「発行されたすべての 'alert' イベントを記録する」
-// 最初の購読者になる — Stage 4 の notifierRegistry も同じ 'alert' イベントに
-// 対して並行して購読を追加するだけでよく、このファイルの他の部分は変更不要
-// (File Structure 図の "AE -- records every transition --> AHS" /
-// "AE -- emits 'alert' --> NR" の2本の矢印に対応)。
+// 最初の購読者になった(File Structure 図の "AE -- records every transition --> AHS"
+// に対応)。
+// Stage 4(このコミット)では notifierRegistry.dispatch を同じ 'alert' イベントの
+// 2人目の購読者として並行登録する — このファイルの他の部分は変更不要
+// (File Structure 図の "AE -- emits 'alert' --> NR" に対応)。Stage 4 時点では
+// notifiers/*.js(Stage 5)がまだ無いため notifierRegistry には何も登録されておらず、
+// dispatch() は実質 no-op(登録済み通知先ゼロの Promise.allSettled)。
 const EventEmitter = require("events");
 const monitorEngine = require("../monitor/monitorEngine");
 const ruleStore = require("./ruleStore");
 const ruleEvaluator = require("./ruleEvaluator");
 const alertHistoryStore = require("./alertHistoryStore");
+const notifierRegistry = require("./notifierRegistry");
 
 class AlertEngine extends EventEmitter {
   constructor() {
@@ -106,14 +110,15 @@ const engine = new AlertEngine();
 // 常に有効(handleUpdate() 自体が monitorEngine の 'update' 購読中にしか呼ばれない
 // ため、実質的には start() 中にしか 'alert' は発行されないが、購読自体は無条件)。
 engine.on("alert", alertHistoryStore.record);
+engine.on("alert", notifierRegistry.dispatch);
 
 module.exports = {
   start: () => engine.start(),
   stop: () => engine.stop(),
   // 'alert' イベントの購読/解除。ペイロードは PHASE5_PLAN.md「Notification Plugins」節の
   // 形(alertId/ruleId/ruleName/metric/value/operator/threshold/severity/state/
-  // previousState/message/timestamp)。alertHistoryStore は上ですでに購読済み。
-  // 将来の購読者は notifierRegistry(Stage 4)。
+  // previousState/message/timestamp)。alertHistoryStore と notifierRegistry は
+  // 上ですでに購読済み。
   on: (eventName, listener) => engine.on(eventName, listener),
   off: (eventName, listener) => engine.off(eventName, listener),
 };
