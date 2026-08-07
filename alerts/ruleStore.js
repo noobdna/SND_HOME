@@ -1,6 +1,6 @@
 // alerts/ruleStore.js
-// アラートルールのスキーマ定義とバリデーション(副作用なしの純粋関数)。
-// CRUD・JSON永続化は後続タスク(1.2, 1.3)で本ファイルに追加する。
+// アラートルールのスキーマ定義・バリデーション・インメモリCRUD。
+// ファイル永続化は後続タスク(1.3)で本ファイルに追加する。
 // スキーマ・遷移ロジックの詳細は PHASE5_PLAN.md の「Alert Engine」セクションを参照。
 
 const ALLOWED_OPERATORS = [">", ">=", "<", "<=", "==", "!="];
@@ -105,9 +105,135 @@ function normalizeRule(rule) {
     hysteresis: rule.hysteresis ?? RULE_DEFAULTS.hysteresis,
     cooldown: rule.cooldown ?? RULE_DEFAULTS.cooldown,
     severity: rule.severity ?? RULE_DEFAULTS.severity,
-    channels: rule.channels ?? [...RULE_DEFAULTS.channels],
+    // 呼び出し元の配列をそのまま保持すると、後から呼び出し元がその配列を
+    // 変更した際にストア内部の状態まで書き換わってしまう。常に複製する。
+    channels: rule.channels ? [...rule.channels] : [...RULE_DEFAULTS.channels],
     enabled: rule.enabled ?? RULE_DEFAULTS.enabled,
   };
+}
+
+// ---------------------------------------------------------
+// インメモリCRUD(ファイル永続化は Task 1.3 で追加)
+// ---------------------------------------------------------
+
+class RuleValidationError extends Error {
+  constructor(errors) {
+    super(`Invalid rule: ${errors.join("; ")}`);
+    this.name = "RuleValidationError";
+    this.errors = errors;
+  }
+}
+
+class RuleNotFoundError extends Error {
+  constructor(id) {
+    super(`Rule not found: ${id}`);
+    this.name = "RuleNotFoundError";
+    this.id = id;
+  }
+}
+
+class RuleConflictError extends Error {
+  constructor(id) {
+    super(`Rule already exists: ${id}`);
+    this.name = "RuleConflictError";
+    this.id = id;
+  }
+}
+
+// id -> normalized rule。内部状態を呼び出し元に直接渡さないよう、
+// 出入りの際は必ず cloneRule() を通す。
+const rules = new Map();
+
+function cloneRule(rule) {
+  return { ...rule, channels: [...rule.channels] };
+}
+
+/**
+ * 新しいルールを作成する。
+ * @param {object} rule
+ * @returns {object} 作成されたルール(複製)
+ * @throws {RuleValidationError} スキーマ違反の場合
+ * @throws {RuleConflictError} 同じidのルールが既に存在する場合
+ */
+function create(rule) {
+  const errors = validateRule(rule);
+  if (errors.length > 0) {
+    throw new RuleValidationError(errors);
+  }
+  if (rules.has(rule.id)) {
+    throw new RuleConflictError(rule.id);
+  }
+
+  const normalized = normalizeRule(rule);
+  rules.set(normalized.id, normalized);
+  return cloneRule(normalized);
+}
+
+/**
+ * 全ルールを配列で返す(複製)。
+ * @returns {object[]}
+ */
+function list() {
+  return Array.from(rules.values()).map(cloneRule);
+}
+
+/**
+ * idでルールを1件取得する(複製)。
+ * @param {string} id
+ * @returns {object}
+ * @throws {RuleNotFoundError}
+ */
+function get(id) {
+  const rule = rules.get(id);
+  if (!rule) {
+    throw new RuleNotFoundError(id);
+  }
+  return cloneRule(rule);
+}
+
+/**
+ * 既存ルールに変更をマージして更新する(部分更新)。
+ * id は不変 — changes.id が渡されても無視され、既存のidが維持される。
+ * @param {string} id
+ * @param {object} changes
+ * @returns {object} 更新後のルール(複製)
+ * @throws {RuleNotFoundError} 対象のルールが存在しない場合
+ * @throws {RuleValidationError} マージ後のルールがスキーマ違反の場合
+ */
+function update(id, changes) {
+  const existing = rules.get(id);
+  if (!existing) {
+    throw new RuleNotFoundError(id);
+  }
+
+  const merged = { ...existing, ...changes, id };
+  const errors = validateRule(merged);
+  if (errors.length > 0) {
+    throw new RuleValidationError(errors);
+  }
+
+  const normalized = normalizeRule(merged);
+  rules.set(id, normalized);
+  return cloneRule(normalized);
+}
+
+/**
+ * idでルールを削除する。
+ * @param {string} id
+ * @throws {RuleNotFoundError}
+ */
+function remove(id) {
+  if (!rules.has(id)) {
+    throw new RuleNotFoundError(id);
+  }
+  rules.delete(id);
+}
+
+/**
+ * 全ルールを消去する(テスト用途、および Task 1.3 でのファイル再読込用途)。
+ */
+function clear() {
+  rules.clear();
 }
 
 module.exports = {
@@ -116,4 +242,13 @@ module.exports = {
   RULE_DEFAULTS,
   validateRule,
   normalizeRule,
+  RuleValidationError,
+  RuleNotFoundError,
+  RuleConflictError,
+  create,
+  list,
+  get,
+  update,
+  remove,
+  clear,
 };
