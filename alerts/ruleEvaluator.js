@@ -149,29 +149,65 @@ function evaluateFromOk(rule, value, state, now) {
 }
 
 /**
- * `state.state === STATES.FIRING` から始まる1ティック分の評価(Task 2.5)。
- * Transition table 上のガードは「次の評価ティックで、まだブリーチが継続している場合」
- * のみを規定している(state diagram 上も FIRING から出る矢印は DOWN 行きの一本のみ)。
- * `FIRING` は「1ティックだけ存在するエッジ状態」であり、通知はすでに `OK → FIRING`
- * 遷移時に送出済みのため、`FIRING → DOWN` では notify しない。
+ * `rule.operator`/`rule.threshold` によるブリーチ判定が false になったティックで、
+ * `FIRING`/`DOWN` からどこへ抜けるかを決める共通ロジック(Task 2.7)。
+ * PHASE5_PLAN.md「State Machine」の Transition table における `DOWN → RECOVERING` ガード
+ * ("Metric drops below clearThreshold") をそのまま実装している。
  *
- * ブリーチが継続していない場合(このティックで既にクリアしている)の遷移先は
- * Transition table にも state diagram にも定義がなく、Stage 2 のタスク分割上も
- * 明示的な担当タスクが存在しない — `DOWN`/`RECOVERING` 側の閾値(`clearThreshold`)
- * を要する判断であり、Task 2.6〜2.7 の範囲。ここでは意図しない挙動(例えば無条件に
- * DOWN 扱いしてしまい "まだ落ちている" という誤ったランタイム状態を作る)を避けるため、
- * 未対応として明示的に例外を投げる。
+ * `threshold` と `clearThreshold` の間には意図的な「デッドゾーン」が存在しうる
+ * (「why hysteresis uses a separate clearThreshold」節 — 例: しきい値 85% に対し
+ * clearThreshold 80% の場合、84% はもうブリーチしていないが「回復」とも言えない)。
+ * このデッドゾーンにいる間は `RECOVERING` に入らず `DOWN` に留まる — clearThreshold を
+ * 割り込むまでは回復が確定しないため(Transition table: "none — recovery isn't
+ * confirmed yet")。`clearThreshold` が未設定で `threshold` と同値の場合(帯域なし)は
+ * デッドゾーンが消失し、ブリーチしていない ⇔ クリア、が完全に一致する。
  *
+ * クリア判定は `compare(value, operator, threshold)` の否定と同じパターンで、
+ * `threshold` の代わりに `clearThreshold` を渡し、結果を反転させる形で行う
+ * (`operator` が `>=` なら「clear」は `value < clearThreshold`、`operator` が `>` なら
+ * 「clear」は `value <= clearThreshold` — De Morgan の関係で `compare()` を再利用できる)。
+ *
+ * @returns {{ nextState: object, notify: boolean }} 通知は発生しない
+ *   (`DOWN → RECOVERING` は「回復未確定」、デッドゾーン残留は状態遷移そのものがない)
+ */
+function resolveAfterBreachClears(rule, value, state, now) {
+  const clear = !compare(value, rule.operator, rule.clearThreshold);
+
+  if (!clear) {
+    // デッドゾーン: しきい値は下回ったが clearThreshold はまだ下回っていない → DOWN 継続。
+    return {
+      nextState: { ...state, state: STATES.DOWN, clearSince: null },
+      notify: false,
+    };
+  }
+
+  // 最初にクリアを検知したティックで clearSince を刻む(breachSince と対称の扱い —
+  // PHASE5_PLAN.md「Hysteresis」節)。DOWN→RECOVERING・FIRING→RECOVERING いずれの
+  // 呼び出し元でも、このティックが「クリアの起点」になる。
+  return {
+    nextState: { ...state, state: STATES.RECOVERING, clearSince: now },
+    notify: false,
+  };
+}
+
+/**
+ * `state.state === STATES.FIRING` から始まる1ティック分の評価(Task 2.5、Task 2.7 で拡張)。
+ *   - まだブリーチ継続中 → `DOWN`(通知なし — `OK → FIRING` 時に送出済み。「1ティックだけ
+ *     存在するエッジ状態」の定義通り)
+ *   - このティックで既にブリーチが解消 → `resolveAfterBreachClears` に委譲
+ *     (`DOWN` に一度も滞在せず `RECOVERING`/`DOWN` へ直行しうる。state diagram 上に
+ *     `FIRING → RECOVERING` の矢印は無いが、Task 2.5 のコミット時点でこのケースは
+ *     「Task 2.6-2.7 で解禁予定」と明記して未対応にしていた。Task 2.6 は `DOWN` 側の
+ *     スコープだったため、この約束を果たすのは Task 2.7 の役目 — `DOWN` に一瞬でも
+ *     滞在させてから同じティックでまた抜けるという無意味な中間状態を作るより、
+ *     `resolveAfterBreachClears` の判定をそのまま適用するほうが一貫している)
  * @returns {{ nextState: object, notify: boolean, alert?: object }}
- * @throws {Error} このティックで既にブリーチが解消している場合(Task 2.6〜2.7 で解禁予定)
  */
 function evaluateFromFiring(rule, value, state, now) {
   const breached = compare(value, rule.operator, rule.threshold);
 
   if (!breached) {
-    throw new Error(
-      "evaluate() does not yet support the breach clearing before FIRING reaches DOWN (added in Task 2.6-2.7)"
-    );
+    return resolveAfterBreachClears(rule, value, state, now);
   }
 
   return {
@@ -194,19 +230,17 @@ function evaluateFromFiring(rule, value, state, now) {
  * `alert.timestamp` はこの再通知そのものが発生した時刻(このティックの `now`)であり、
  * `alertId` に埋め込まれた `incidentStartedAt` とは意図的に別物。
  *
- * ブリーチが解消している場合(`clearThreshold` を下回った)の `DOWN → RECOVERING` 遷移は
- * Task 2.7 の範囲 — `evaluateFromFiring` と同じ理由で、未対応として明示的に例外を投げる。
+ * このティックでブリーチが解消している場合(`resolveAfterBreachClears` に委譲、Task 2.7)
+ * は `clearThreshold` を下回っていれば `RECOVERING` へ、デッドゾーン内であれば `DOWN` に
+ * 留まる(いずれも通知なし — Transition table の `DOWN → RECOVERING` ガード通り)。
  *
  * @returns {{ nextState: object, notify: boolean, alert?: object }}
- * @throws {Error} このティックでブリーチが解消している場合(Task 2.7 で解禁予定)
  */
 function evaluateFromDown(rule, value, state, now) {
   const breached = compare(value, rule.operator, rule.threshold);
 
   if (!breached) {
-    throw new Error(
-      "evaluate() does not yet support DOWN clearing below clearThreshold (added in Task 2.7)"
-    );
+    return resolveAfterBreachClears(rule, value, state, now);
   }
 
   const cooldownMs = rule.cooldown * 1000;
@@ -240,13 +274,78 @@ function evaluateFromDown(rule, value, state, now) {
 }
 
 /**
+ * `state.state === STATES.RECOVERING` から始まる1ティック分の評価(Task 2.7)。
+ * ガードは `rule.operator`/`rule.threshold` による「元のブリーチ条件」への再ブリーチ有無
+ * (`clearThreshold` ではない)— PHASE5_PLAN.md「Hysteresis」節の「`clearSince` ...
+ * cleared if it breaches again」の "breaches" は Duration 節と同じブリーチ条件を指す
+ * (symmetric mechanism と明記されている)ため、`clearThreshold` とのデッドゾーンは
+ * `RECOVERING` の再ブリーチ判定には関与しない — `resolveAfterBreachClears` とは非対称:
+ *   - 元のしきい値に再ブリーチ → `DOWN`(`clearSince` をリセット。Duplicate Suppression
+ *     節の通り、新しい `alertId` は発行せず・通知もしない — 同一インシデントの継続)
+ *   - 再ブリーチなし、`hysteresis` 秒未満しかクリア継続していない → `RECOVERING` 継続、
+ *     `clearSince` は据え置き(breachSince と対称 — 最初にクリアしたティックで刻んだ
+ *     ものを引き継ぐだけで、このティックでは更新しない)
+ *   - 再ブリーチなし、`hysteresis` 秒以上クリアが継続 → `OK`(通知あり — "resolved"。
+ *     `alert.alertId` にはクローズするインシデントの ID を残しつつ、`nextState` は
+ *     `createInitialState()` と同じ形に戻す — 次にまた `OK → FIRING` する際は
+ *     新しいインシデントとして新しい `alertId` を発行する)
+ * @returns {{ nextState: object, notify: boolean, alert?: object }}
+ */
+function evaluateFromRecovering(rule, value, state, now) {
+  const breachedAgain = compare(value, rule.operator, rule.threshold);
+
+  if (breachedAgain) {
+    return {
+      nextState: { ...state, state: STATES.DOWN, clearSince: null },
+      notify: false,
+    };
+  }
+
+  const hysteresisMs = rule.hysteresis * 1000;
+
+  if (now - state.clearSince < hysteresisMs) {
+    return {
+      nextState: { ...state },
+      notify: false,
+    };
+  }
+
+  const resolvedAt = new Date(now).toISOString();
+
+  const nextState = {
+    state: STATES.OK,
+    breachSince: null,
+    clearSince: null,
+    lastNotifiedAt: now,
+    alertId: null,
+  };
+
+  const alert = {
+    alertId: state.alertId,
+    ruleId: rule.id,
+    ruleName: rule.name,
+    metric: rule.metric,
+    value,
+    operator: rule.operator,
+    threshold: rule.threshold,
+    severity: rule.severity,
+    state: STATES.OK,
+    previousState: STATES.RECOVERING,
+    message: `${rule.name} has RESOLVED: ${rule.metric} = ${value} (threshold ${rule.operator} ${rule.threshold})`,
+    timestamp: resolvedAt,
+  };
+
+  return { nextState, notify: true, alert };
+}
+
+/**
  * ルール1件を1ティック分評価し、次のランタイム状態を返す(純粋関数、I/Oなし)。
  * PHASE5_PLAN.md の「State Machine」節・Transition table に準拠。
  *
- * 現時点(Task 2.4〜2.6)では `state.state` が `OK`・`FIRING`・`DOWN` の場合の遷移のみを
- * 実装している。詳細は `evaluateFromOk` / `evaluateFromFiring` / `evaluateFromDown` の
- * JSDoc を参照。`RECOVERING` から始まる遷移、および `FIRING`/`DOWN` でこのティック中に
- * ブリーチが解消しているケースは Task 2.7 で追加される。
+ * Task 2.4〜2.7 により、`state.state` の4値すべて(`OK`/`FIRING`/`DOWN`/`RECOVERING`)
+ * からの遷移を実装済み。詳細は `evaluateFromOk` / `evaluateFromFiring` /
+ * `evaluateFromDown` / `evaluateFromRecovering` / `resolveAfterBreachClears` の
+ * JSDoc を参照。
  *
  * `value` が `undefined`(resolveMetric が「データなし」を返した場合)を渡すかどうかは
  * 呼び出し元の責務 — 本来はそのティックの評価自体をスキップすべきだが、万一そのまま
@@ -258,8 +357,9 @@ function evaluateFromDown(rule, value, state, now) {
  * @param {object} state - このルールの現在のランタイム状態
  * @param {number} now - 現在時刻(epoch ms。通常は `Date.now()`)
  * @returns {{ nextState: object, notify: boolean, alert?: object }}
- * @throws {Error} `state.state` が `RECOVERING` の場合(Task 2.7 で解禁予定)、
- *   または `FIRING`/`DOWN` でこのティック中にブリーチが解消している場合(同上)
+ * @throws {Error} `state.state` が `STATES` のいずれにも一致しない場合(RuleStore/
+ *   AlertEngine 側で保証されるため、通常到達しない — compare() の未知オペレータ扱いと
+ *   同様の defense-in-depth)
  */
 function evaluate(rule, value, state, now) {
   if (state.state === STATES.OK) {
@@ -274,9 +374,11 @@ function evaluate(rule, value, state, now) {
     return evaluateFromDown(rule, value, state, now);
   }
 
-  throw new Error(
-    `evaluate() does not yet support transitions from state "${state.state}" (added in Task 2.7)`
-  );
+  if (state.state === STATES.RECOVERING) {
+    return evaluateFromRecovering(rule, value, state, now);
+  }
+
+  throw new Error(`Unknown state: ${state.state}`);
 }
 
 module.exports = {
