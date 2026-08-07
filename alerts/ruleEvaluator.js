@@ -91,34 +91,13 @@ function compare(value, operator, threshold) {
 }
 
 /**
- * ルール1件を1ティック分評価し、次のランタイム状態を返す(純粋関数、I/Oなし)。
- * PHASE5_PLAN.md の「State Machine」節・Transition table に準拠。
- *
- * 現時点(Task 2.4)では `state.state === STATES.OK` から始まる遷移のみを実装している:
+ * `state.state === STATES.OK` から始まる1ティック分の評価(Task 2.4)。
  *   - OK → OK(非ブリーチ、breachSince をリセット)
  *   - OK → OK(ブリーチ中だが `duration` 秒未満、breachSince を内部トラッキング)
  *   - OK → FIRING(`duration` 秒以上ブリーチが継続 — 通知あり)
- * FIRING/DOWN/RECOVERING から始まる遷移は Task 2.5〜2.7 で追加される。
- *
- * `value` が `undefined`(resolveMetric が「データなし」を返した場合)を渡すかどうかは
- * 呼び出し元の責務 — 本来はそのティックの評価自体をスキップすべきだが、万一そのまま
- * 渡された場合も compare() の null-safety により「非ブリーチ」として扱われるため、
- * 誤って発報することはない。
- *
- * @param {object} rule - normalizeRule() 済みのルール定義
- * @param {number} value - resolveMetric() で解決済みのメトリクス値
- * @param {object} state - このルールの現在のランタイム状態(`state.state === STATES.OK` であること)
- * @param {number} now - 現在時刻(epoch ms。通常は `Date.now()`)
  * @returns {{ nextState: object, notify: boolean, alert?: object }}
- * @throws {Error} `state.state` が `STATES.OK` 以外の場合(Task 2.5〜2.7 で解禁予定)
  */
-function evaluate(rule, value, state, now) {
-  if (state.state !== STATES.OK) {
-    throw new Error(
-      `evaluate() does not yet support transitions from state "${state.state}" (added in Task 2.5-2.7)`
-    );
-  }
-
+function evaluateFromOk(rule, value, state, now) {
   const breached = compare(value, rule.operator, rule.threshold);
 
   if (!breached) {
@@ -167,6 +146,73 @@ function evaluate(rule, value, state, now) {
   };
 
   return { nextState, notify: true, alert };
+}
+
+/**
+ * `state.state === STATES.FIRING` から始まる1ティック分の評価(Task 2.5)。
+ * Transition table 上のガードは「次の評価ティックで、まだブリーチが継続している場合」
+ * のみを規定している(state diagram 上も FIRING から出る矢印は DOWN 行きの一本のみ)。
+ * `FIRING` は「1ティックだけ存在するエッジ状態」であり、通知はすでに `OK → FIRING`
+ * 遷移時に送出済みのため、`FIRING → DOWN` では notify しない。
+ *
+ * ブリーチが継続していない場合(このティックで既にクリアしている)の遷移先は
+ * Transition table にも state diagram にも定義がなく、Stage 2 のタスク分割上も
+ * 明示的な担当タスクが存在しない — `DOWN`/`RECOVERING` 側の閾値(`clearThreshold`)
+ * を要する判断であり、Task 2.6〜2.7 の範囲。ここでは意図しない挙動(例えば無条件に
+ * DOWN 扱いしてしまい "まだ落ちている" という誤ったランタイム状態を作る)を避けるため、
+ * 未対応として明示的に例外を投げる。
+ *
+ * @returns {{ nextState: object, notify: boolean, alert?: object }}
+ * @throws {Error} このティックで既にブリーチが解消している場合(Task 2.6〜2.7 で解禁予定)
+ */
+function evaluateFromFiring(rule, value, state, now) {
+  const breached = compare(value, rule.operator, rule.threshold);
+
+  if (!breached) {
+    throw new Error(
+      "evaluate() does not yet support the breach clearing before FIRING reaches DOWN (added in Task 2.6-2.7)"
+    );
+  }
+
+  return {
+    nextState: { ...state, state: STATES.DOWN, clearSince: null },
+    notify: false,
+  };
+}
+
+/**
+ * ルール1件を1ティック分評価し、次のランタイム状態を返す(純粋関数、I/Oなし)。
+ * PHASE5_PLAN.md の「State Machine」節・Transition table に準拠。
+ *
+ * 現時点(Task 2.4〜2.5)では `state.state` が `OK` または `FIRING` の場合の遷移のみを
+ * 実装している。詳細は `evaluateFromOk` / `evaluateFromFiring` の JSDoc を参照。
+ * `DOWN`/`RECOVERING` から始まる遷移は Task 2.6〜2.7 で追加される。
+ *
+ * `value` が `undefined`(resolveMetric が「データなし」を返した場合)を渡すかどうかは
+ * 呼び出し元の責務 — 本来はそのティックの評価自体をスキップすべきだが、万一そのまま
+ * 渡された場合も compare() の null-safety により「非ブリーチ」として扱われるため、
+ * 誤って発報することはない。
+ *
+ * @param {object} rule - normalizeRule() 済みのルール定義
+ * @param {number} value - resolveMetric() で解決済みのメトリクス値
+ * @param {object} state - このルールの現在のランタイム状態
+ * @param {number} now - 現在時刻(epoch ms。通常は `Date.now()`)
+ * @returns {{ nextState: object, notify: boolean, alert?: object }}
+ * @throws {Error} `state.state` が `DOWN`/`RECOVERING` の場合(Task 2.6〜2.7 で解禁予定)、
+ *   または `FIRING` でこのティック中にブリーチが解消している場合(同上)
+ */
+function evaluate(rule, value, state, now) {
+  if (state.state === STATES.OK) {
+    return evaluateFromOk(rule, value, state, now);
+  }
+
+  if (state.state === STATES.FIRING) {
+    return evaluateFromFiring(rule, value, state, now);
+  }
+
+  throw new Error(
+    `evaluate() does not yet support transitions from state "${state.state}" (added in Task 2.6-2.7)`
+  );
 }
 
 module.exports = {
