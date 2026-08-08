@@ -40,6 +40,11 @@ class AlertEngine extends EventEmitter {
     // ルール「定義」(ruleStore)とは別物 — プロセス再起動で消えてよい
     // (PHASE5_PLAN.md の「Duration」節、createInitialState() の JSDoc参照)。
     this.runtimeStates = new Map();
+    // ルールIDごとに直近解決できたメトリクス値。ruleEvaluator の状態機械には
+    // 含まれない(evaluate() への入力パラメータであり、保持するランタイム状態の
+    // 一部ではない — ruleEvaluator.js のドキュメント通りの状態形をあえて汚さない)。
+    // GET /api/alerts/rules の runtime.value(Stage 6)専用の、表示用の副次情報。
+    this.lastValues = new Map();
   }
 
   /**
@@ -67,6 +72,7 @@ class AlertEngine extends EventEmitter {
       if (value === undefined) {
         continue;
       }
+      this.lastValues.set(rule.id, value);
 
       const currentState = this.runtimeStates.get(rule.id) ?? ruleEvaluator.createInitialState();
       const { nextState, notify, alert } = ruleEvaluator.evaluate(rule, value, currentState, now);
@@ -76,6 +82,44 @@ class AlertEngine extends EventEmitter {
         this.emit("alert", alert);
       }
     }
+  }
+
+  /**
+   * ルール1件の表示用ランタイム情報を返す(PHASE5_PLAN.md `GET /api/alerts/rules`
+   * の例示レスポンスにある `runtime` オブジェクトと同じ形: `{ state, value, since,
+   * lastNotifiedAt }`)。まだ一度も評価されていないルール(作成直後で monitorEngine
+   * のティックがまだ来ていない等)には `createInitialState()`相当のOK状態を返す —
+   * 「未評価」という3つ目の概念を新設せず、状態機械が元々持つ意味のある初期値に
+   * フォールバックすることで、API利用者は常に整形済みの runtime オブジェクトを
+   * 受け取れる(null分岐が不要)。
+   *
+   * `since` は state に応じて意味が変わる:
+   *   - `FIRING`/`DOWN` → `breachSince`(このインシデントが始まった時刻)
+   *   - `RECOVERING` → `clearSince`(クリアし始めた時刻)
+   *   - `OK` → 常に `null`(`breachSince` が内部的に進行中でも外部には見せない —
+   *     Transition table の「OK→OK(内部 `breachSince` 計測中)」は
+   *     "intentionally invisible externally" と明記されている)
+   *
+   * @param {string} ruleId
+   * @returns {{ state: string, value: number|null, since: string|null, lastNotifiedAt: string|null }}
+   */
+  getRuntime(ruleId) {
+    const state = this.runtimeStates.get(ruleId) ?? ruleEvaluator.createInitialState();
+    const value = this.lastValues.get(ruleId) ?? null;
+
+    let sinceMs = null;
+    if (state.state === ruleEvaluator.STATES.FIRING || state.state === ruleEvaluator.STATES.DOWN) {
+      sinceMs = state.breachSince;
+    } else if (state.state === ruleEvaluator.STATES.RECOVERING) {
+      sinceMs = state.clearSince;
+    }
+
+    return {
+      state: state.state,
+      value,
+      since: sinceMs !== null ? new Date(sinceMs).toISOString() : null,
+      lastNotifiedAt: state.lastNotifiedAt !== null ? new Date(state.lastNotifiedAt).toISOString() : null,
+    };
   }
 
   /**
@@ -115,6 +159,8 @@ engine.on("alert", notifierRegistry.dispatch);
 module.exports = {
   start: () => engine.start(),
   stop: () => engine.stop(),
+  // ルール1件の表示用ランタイム情報(Stage 6 の routes/alerts.js が使う読み取り専用API)。
+  getRuntime: (ruleId) => engine.getRuntime(ruleId),
   // 'alert' イベントの購読/解除。ペイロードは PHASE5_PLAN.md「Notification Plugins」節の
   // 形(alertId/ruleId/ruleName/metric/value/operator/threshold/severity/state/
   // previousState/message/timestamp)。alertHistoryStore と notifierRegistry は
