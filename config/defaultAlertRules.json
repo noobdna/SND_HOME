@@ -1,0 +1,44 @@
+[
+  {
+    "id": "disk-root-critical",
+    "name": "Root disk usage critical",
+    "metric": "disk.percent",
+    "operator": ">=",
+    "threshold": 90,
+    "clearThreshold": 80,
+    "duration": 30,
+    "hysteresis": 60,
+    "cooldown": 1800,
+    "severity": "critical",
+    "channels": [],
+    "enabled": true
+  },
+  {
+    "id": "cpu-high",
+    "name": "CPU usage high",
+    "metric": "cpu.usage",
+    "operator": ">=",
+    "threshold": 90,
+    "clearThreshold": 80,
+    "duration": 300,
+    "hysteresis": 60,
+    "cooldown": 1800,
+    "severity": "warning",
+    "channels": [],
+    "enabled": true
+  },
+  {
+    "id": "memory-critical",
+    "name": "Memory usage critical",
+    "metric": "memory.percent",
+    "operator": ">=",
+    "threshold": 90,
+    "clearThreshold": 80,
+    "duration": 30,
+    "hysteresis": 60,
+    "cooldown": 1800,
+    "severity": "critical",
+    "channels": [],
+    "enabled": true
+  }
+]

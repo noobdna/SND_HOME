@@ -336,6 +336,48 @@ function load(filePath = getRulesPath()) {
   return { loaded, skipped };
 }
 
+// PHASE5_PLAN.md「File Structure」節: `config/defaultAlertRules.json`
+// 「seed rules loaded on first-ever run (empty rule store)」(Task 7.1/7.2)。
+const DEFAULT_SEED_PATH = path.join(__dirname, "..", "config", "defaultAlertRules.json");
+
+/**
+ * サーバー起動時のエントリポイント。永続化ファイル(既定 alertRules.json)が
+ * 既に存在する場合は通常通り load() する。存在しない場合(初回起動)は
+ * config/defaultAlertRules.json のシードルールを読み込み、永続化ファイルへ
+ * 書き込む — 以降の起動では「既存ファイルあり」経路に入るため、シードは
+ * 一度だけ行われ、その後はユーザーが編集した実データとして扱われる
+ * (シード後にユーザーが編集/削除しても、次回起動時に元のシードへ巻き戻る
+ * ことはない)。
+ *
+ * 気付いた前提: server.js はこれまで起動時に load() を一切呼んでいなかった
+ * (grep で確認済み)— つまり API 経由で作成したルールは JSON へ書き込みスルー
+ * されてはいたが、プロセス再起動のたびに読み戻されず、インメモリの
+ * ruleStore は常に空の状態から始まっていた。本関数はこの「起動時ロード」
+ * 自体も初めて導入する — Task 7.2 の題名(「初回起動時のみシードする」)が
+ * 成立するには、そもそも「起動時にロードする」という前提の仕組みが必要なため、
+ * この導入は 7.2 のスコープの一部とみなした。
+ * @param {string} [filePath] 実運用の永続化パス(既定 getRulesPath())
+ * @param {string} [seedFilePath] シードデータのパス(既定 config/defaultAlertRules.json)
+ * @returns {{ loaded: number, skipped: number, seeded: boolean }}
+ */
+function loadOrSeed(filePath = getRulesPath(), seedFilePath = DEFAULT_SEED_PATH) {
+  if (fs.existsSync(filePath)) {
+    const result = load(filePath);
+    console.log(
+      `[ruleStore] Loaded ${result.loaded} rule(s) from ${filePath}` +
+        (result.skipped ? ` (${result.skipped} skipped)` : "")
+    );
+    return { ...result, seeded: false };
+  }
+
+  const result = load(seedFilePath);
+  persist(filePath);
+  console.log(
+    `[ruleStore] No existing rules file found — seeded ${result.loaded} default rule(s) from ${seedFilePath}`
+  );
+  return { ...result, seeded: true };
+}
+
 module.exports = {
   ALLOWED_OPERATORS,
   ALLOWED_SEVERITIES,
@@ -352,6 +394,7 @@ module.exports = {
   remove,
   clear,
   load,
+  loadOrSeed,
   persist,
   getRulesPath,
 };
