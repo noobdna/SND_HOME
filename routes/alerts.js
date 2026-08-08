@@ -13,10 +13,9 @@
 //   GET /history?limit=N — 最近のアラート状態遷移イベント(既定100件)
 // Task 6.5 で /rules/:id/test を追加した:
 //   POST /rules/:id/test — 合成アラートを実際に通知先へ送信(実ブリーチ不要)
-// Task 6.7(このコミット)で /engine/status を追加した:
+// Task 6.7 で /engine/status を追加した:
 //   GET /engine/status — アラートエンジン自体の稼働状態
-// server.js への実際のマウントは Task 6.8 で行う(Stage 6 のタスク分割どおり、
-// 本ファイルの作成とマウントは別タスク)。
+// Task 6.8 で server.js に /api/alerts としてマウント済み。
 //
 // レスポンス形は既存の routes/system.js・routes/monitor.js と同じ envelope
 // (`{ status: "ok", data }` / `{ status: "error", message }`)に揃えるが、

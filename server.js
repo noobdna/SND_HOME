@@ -3,6 +3,8 @@ require("dotenv").config();
 const express = require("express");
 const systemRoutes = require("./routes/system");
 const monitorRoutes = require("./routes/monitor");
+const alertsRoutes = require("./routes/alerts");
+const notifiersRoutes = require("./routes/notifiers");
 const { startMonitoring, stopMonitoring } = require("./monitor/monitorEngine");
 const { start: startAlerting, stop: stopAlerting } = require("./alerts/alertEngine");
 
@@ -22,6 +24,8 @@ app.get("/", (req, res) => {
 
 app.use("/api", systemRoutes);
 app.use("/api/monitor", monitorRoutes);
+app.use("/api/alerts", alertsRoutes);
+app.use("/api/notifiers", notifiersRoutes);
 
 // ---------------------------------------------------------
 // サーバー起動

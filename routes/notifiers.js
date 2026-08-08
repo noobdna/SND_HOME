@@ -16,7 +16,7 @@
 // その場で呼ぶことで、常に4つ全てをライブな状態で列挙する(collectorRegistry.js の
 // 固定プラグインリストと同じ、既知の小規模プラグイン集合を列挙する既存パターン)。
 //
-// server.js への実際のマウントは Task 6.8 で行う(routes/alerts.js と同じ方針)。
+// Task 6.8 で server.js に /api/notifiers としてマウント済み。
 //
 // ⚠️ SECURITY TODO — routes/alerts.js と同じ注記: POST /:name/test は外部サービスへ
 // 実際にメッセージを送信する変更系エンドポイントだが、認証ミドルウェアはまだ
