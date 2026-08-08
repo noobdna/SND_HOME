@@ -3,11 +3,13 @@
 // Task 6.1 で読み取り専用の2エンドポイントを実装した:
 //   GET /rules      — 全ルール一覧 + 各ルールの現在のランタイム状態
 //   GET /rules/:id  — ルール1件 + そのランタイム状態
-// Task 6.2(このコミット)で最初の変更系(mutating)エンドポイントを追加する:
+// Task 6.2 で最初の変更系(mutating)エンドポイントを追加した:
 //   POST   /rules      — ルール新規作成
 //   PUT    /rules/:id  — ルール更新
 //   DELETE /rules/:id  — ルール削除(ランタイム状態も破棄)
-// /active(6.3)、/history(6.4)、/rules/:id/test(6.5)、/engine/status(6.7)は未実装。
+// Task 6.3(このコミット)で /active を追加した:
+//   GET /active — FIRING/DOWN/RECOVERING のルールのみ一覧
+// /history(6.4)、/rules/:id/test(6.5)、/engine/status(6.7)は未実装。
 // server.js への実際のマウントも Task 6.8 で行う(Stage 6 のタスク分割どおり、
 // 本ファイルの作成とマウントは別タスク)。
 //
@@ -25,6 +27,7 @@
 const express = require("express");
 const ruleStore = require("../alerts/ruleStore");
 const alertEngine = require("../alerts/alertEngine");
+const { STATES } = require("../alerts/ruleEvaluator");
 
 const router = express.Router();
 
@@ -58,6 +61,28 @@ router.get("/rules/:id", (req, res) => {
       res.status(404).json({ status: "error", message: error.message });
       return;
     }
+    res.status(500).json({
+      status: "error",
+      message: error.message || "Unknown error",
+    });
+  }
+});
+
+// PHASE5_PLAN.md「API」節: "List only rules currently in FIRING, DOWN, or RECOVERING —
+// the 'what's broken right now' view"。GET /rules と同じ rule+runtime の形を返し、
+// runtime.state が OK のものだけを除外する(4値のうち3つ = FIRING/DOWN/RECOVERING)。
+// enabled: false のルールでも、無効化される前から続く runtime.state がまだ
+// FIRING/DOWN/RECOVERING のままなら含める — 無効化はそれ以降の評価を止めるだけで、
+// 進行中のインシデントを遡って解消したことにはならない(alertEngine.js のループが
+// 無効化ルールを評価対象から外すだけで、既存のランタイム状態はそのまま残る設計と一貫)。
+router.get("/active", (req, res) => {
+  try {
+    const data = ruleStore
+      .list()
+      .map(withRuntime)
+      .filter((entry) => entry.runtime.state !== STATES.OK);
+    res.json({ status: "ok", data });
+  } catch (error) {
     res.status(500).json({
       status: "error",
       message: error.message || "Unknown error",
