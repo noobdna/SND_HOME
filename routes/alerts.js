@@ -7,9 +7,11 @@
 //   POST   /rules      — ルール新規作成
 //   PUT    /rules/:id  — ルール更新
 //   DELETE /rules/:id  — ルール削除(ランタイム状態も破棄)
-// Task 6.3(このコミット)で /active を追加した:
+// Task 6.3 で /active を追加した:
 //   GET /active — FIRING/DOWN/RECOVERING のルールのみ一覧
-// /history(6.4)、/rules/:id/test(6.5)、/engine/status(6.7)は未実装。
+// Task 6.4(このコミット)で /history を追加した:
+//   GET /history?limit=N — 最近のアラート状態遷移イベント(既定100件)
+// /rules/:id/test(6.5)、/engine/status(6.7)は未実装。
 // server.js への実際のマウントも Task 6.8 で行う(Stage 6 のタスク分割どおり、
 // 本ファイルの作成とマウントは別タスク)。
 //
@@ -27,6 +29,7 @@
 const express = require("express");
 const ruleStore = require("../alerts/ruleStore");
 const alertEngine = require("../alerts/alertEngine");
+const alertHistoryStore = require("../alerts/alertHistoryStore");
 const { STATES } = require("../alerts/ruleEvaluator");
 
 const router = express.Router();
@@ -82,6 +85,30 @@ router.get("/active", (req, res) => {
       .map(withRuntime)
       .filter((entry) => entry.runtime.state !== STATES.OK);
     res.json({ status: "ok", data });
+  } catch (error) {
+    res.status(500).json({
+      status: "error",
+      message: error.message || "Unknown error",
+    });
+  }
+});
+
+// PHASE5_PLAN.md「API」節: "Recent alert state-transition events (default 100),
+// mirrors /api/system/history's shape/pagination"。routes/system.js の
+// GET /system/history と同じ ?limit= の解釈(数値でなければ既定値、0以下も既定値)。
+// system/history の `interval`(monitorEngineのポーリング間隔)に相当するフィールドは
+// 持たない — アラート履歴は固定間隔のティックではなく状態遷移イベントそのものなので、
+// 「間隔」という概念自体が存在しない。
+router.get("/history", (req, res) => {
+  try {
+    const limitParam = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 100;
+    const data = alertHistoryStore.getHistory({ limit });
+    res.json({
+      status: "ok",
+      count: data.length,
+      data,
+    });
   } catch (error) {
     res.status(500).json({
       status: "error",
