@@ -284,3 +284,85 @@ describe("GET /api/alerts/engine/status", () => {
     assert.ok(after.body.lastEvaluatedAt); // but the last tick is still recorded
   });
 });
+
+describe("POST /api/alerts/rules/:id/silence (Stage 9 stretch)", () => {
+  it("sets a future silencedUntil from durationSeconds", async () => {
+    ruleStore.create(sampleRule("silence-a"));
+    const before = Date.now();
+    const res = await request(app)
+      .post("/api/alerts/rules/silence-a/silence")
+      .send({ durationSeconds: 3600 });
+    assert.equal(res.status, 200);
+    const silencedUntilMs = Date.parse(res.body.data.silencedUntil);
+    assert.ok(silencedUntilMs >= before + 3600 * 1000 - 1000);
+  });
+
+  it("sets an explicit silencedUntil verbatim when 'until' is given", async () => {
+    ruleStore.create(sampleRule("silence-b"));
+    const until = new Date(Date.now() + 7200 * 1000).toISOString();
+    const res = await request(app).post("/api/alerts/rules/silence-b/silence").send({ until });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.silencedUntil, until);
+  });
+
+  it("400s when neither durationSeconds nor until is provided", async () => {
+    ruleStore.create(sampleRule("silence-c"));
+    const res = await request(app).post("/api/alerts/rules/silence-c/silence").send({});
+    assert.equal(res.status, 400);
+  });
+
+  it("404s for an unknown rule id", async () => {
+    const res = await request(app)
+      .post("/api/alerts/rules/does-not-exist/silence")
+      .send({ durationSeconds: 60 });
+    assert.equal(res.status, 404);
+  });
+
+  it("PUT with silencedUntil: null unsilences a rule", async () => {
+    ruleStore.create(sampleRule("silence-d"));
+    await request(app).post("/api/alerts/rules/silence-d/silence").send({ durationSeconds: 3600 });
+    const res = await request(app).put("/api/alerts/rules/silence-d").send({ silencedUntil: null });
+    assert.equal(res.body.data.silencedUntil, null);
+  });
+
+  it("while silenced: notify still records history but does not reach notifierRegistry", async () => {
+    const id = "silence-behavior-notify";
+    ruleStore.create(sampleRule(id, { duration: 0 }));
+    await request(app).post(`/api/alerts/rules/${id}/silence`).send({ durationSeconds: 3600 });
+
+    const notifierRegistry = require("../alerts/notifierRegistry");
+    const received = [];
+    notifierRegistry.register({
+      name: `spy-${id}`,
+      configured: () => true,
+      notify: async (alert) => received.push(alert),
+    });
+
+    const historyBefore = alertHistoryStore.getHistory().length;
+    alertEngine.start();
+    emitterRef.emit("update", { cpu: { usage: 95 } }); // OK -> FIRING, notify=true
+    alertEngine.stop();
+
+    assert.equal(received.length, 0);
+    assert.equal(alertHistoryStore.getHistory().length, historyBefore + 1);
+    assert.equal(alertEngine.getRuntime(id).state, "FIRING"); // runtime still updates normally
+  });
+
+  it("the manual /rules/:id/test endpoint still dispatches even while silenced", async () => {
+    const id = "silence-behavior-test-endpoint";
+    ruleStore.create(sampleRule(id));
+    await request(app).post(`/api/alerts/rules/${id}/silence`).send({ durationSeconds: 3600 });
+
+    const notifierRegistry = require("../alerts/notifierRegistry");
+    const received = [];
+    notifierRegistry.register({
+      name: `spy-test-${id}`,
+      configured: () => true,
+      notify: async (alert) => received.push(alert),
+    });
+
+    const res = await request(app).post(`/api/alerts/rules/${id}/test`);
+    assert.equal(res.status, 200);
+    assert.equal(received.length, 1);
+  });
+});

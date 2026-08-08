@@ -66,6 +66,20 @@ class AlertEngine extends EventEmitter {
    * 更新は notify の有無に関わらず常に行う — 通知は「発火するかどうか」の話であり、
    * 状態遷移そのものとは独立している(例: DOWN→DOWN のクールダウン抑制中でも
    * ランタイム状態は毎ティック持続させる必要がある)。
+   *
+   * ルールが `silencedUntil`(このティックの `now` より未来のISOタイムスタンプ)で
+   * サイレンス中の場合(PHASE5_PLAN.md「Stage 9 — Stretch」Task 9.2:
+   * "suppress dispatch (but keep evaluating/recording) while silenced")、
+   * 通常通り 'alert' を発行する代わりに `alertHistoryStore.record(alert)` を
+   * 直接呼ぶ — 評価・ランタイム状態更新・履歴記録は一切変えず、
+   * `notifierRegistry.dispatch()` へ到達する経路(Task 3.5/4.3 で確立した
+   * 'alert' イベント購読)だけを迂回する。あえて 'alert' イベント自体の発行を
+   * 条件付きにしたのは、Task 3.5/4.3 の配線(`engine.on("alert", ...)`)を
+   * 変更・撤回せずに済む、最小の変更だったため — 代償として、将来 誰かが
+   * `alertEngine.on('alert', ...)` で購読する別の用途を追加した場合、その購読者も
+   * サイレンス中は同様に呼ばれなくなる(現状の唯一の購読者2つ、
+   * alertHistoryStore と notifierRegistry の望ましい挙動とは一致するが、
+   * 将来の第三の購読者の意図によっては要再検討)。
    * @param {object} snapshot - collectorRegistry.collectAll() が返した最新のスナップショット
    */
   handleUpdate(snapshot) {
@@ -85,7 +99,12 @@ class AlertEngine extends EventEmitter {
       this.runtimeStates.set(rule.id, nextState);
 
       if (notify) {
-        this.emit("alert", alert);
+        const isSilenced = rule.silencedUntil !== null && now < Date.parse(rule.silencedUntil);
+        if (isSilenced) {
+          alertHistoryStore.record(alert);
+        } else {
+          this.emit("alert", alert);
+        }
       }
     }
   }

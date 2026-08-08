@@ -16,6 +16,9 @@
 // Task 6.7 で /engine/status を追加した:
 //   GET /engine/status — アラートエンジン自体の稼働状態
 // Task 6.8 で server.js に /api/alerts としてマウント済み。
+// Task 9.2(Stage 9 — Stretch)で /rules/:id/silence を追加した:
+//   POST /rules/:id/silence — 指定期間、このルールの通知だけを抑制する
+//   (評価・履歴記録は継続。解除は PUT /rules/:id で silencedUntil: null)
 //
 // レスポンス形は既存の routes/system.js・routes/monitor.js と同じ envelope
 // (`{ status: "ok", data }` / `{ status: "error", message }`)に揃えるが、
@@ -152,6 +155,60 @@ router.post("/rules", (req, res) => {
 router.put("/rules/:id", (req, res) => {
   try {
     const rule = ruleStore.update(req.params.id, req.body);
+    res.json({ status: "ok", data: withRuntime(rule) });
+  } catch (error) {
+    if (error instanceof ruleStore.RuleValidationError) {
+      res.status(400).json({ status: "error", message: error.message, errors: error.errors });
+      return;
+    }
+    if (error instanceof ruleStore.RuleNotFoundError) {
+      res.status(404).json({ status: "error", message: error.message });
+      return;
+    }
+    res.status(500).json({
+      status: "error",
+      message: error.message || "Unknown error",
+    });
+  }
+});
+
+// PHASE5_PLAN.md「Stage 9 — Stretch」Task 9.2: "POST /api/alerts/rules/:id/silence
+// + suppress dispatch (but keep evaluating/recording) while silenced"。
+// リクエストボディは `{ durationSeconds }` か `{ until }` のどちらかを受け付ける
+// (両方省略時は 400 — 「いつまでサイレンスするか」を必ず明示させる。無期限
+// サイレンスをデフォルトにしないための意図的な設計)。両方指定された場合は
+// `until`(明示的な終了時刻)を優先する。
+// 実際の抑制ロジックは alertEngine.handleUpdate() 側(rule.silencedUntil を見て
+// notifierRegistry への配線だけを迂回する)にあり、このルートは `silencedUntil`
+// フィールドを設定するだけ — 通常の ruleStore.update() を経由するため、
+// バリデーション・書き込みスルー永続化も自動的に効く。
+// サイレンス解除は専用エンドポイントを設けず、既存の PUT /rules/:id で
+// `{ "silencedUntil": null }` を送ることで行える(silencedUntil は Task 9.1 で
+// 追加した通常のスキーマフィールドであり、PUT からも直接設定できるため)。
+//
+// POST /api/alerts/rules/:id/test(Task 6.5)はこのサイレンスの影響を受けない —
+// あちらは「通知設定を手動で疎通確認する」ための明示的な操作であり、無関係な
+// サイレンス状態によって黙って抑制されると「なぜテストメッセージが届かないのか」
+// と混乱を招くため、意図的に別経路(notifierRegistry.dispatch() を直接呼ぶ)
+// のままにしてある。
+router.post("/rules/:id/silence", (req, res) => {
+  try {
+    const { durationSeconds, until } = req.body || {};
+
+    let silencedUntil;
+    if (typeof until === "string" && !Number.isNaN(Date.parse(until))) {
+      silencedUntil = new Date(until).toISOString();
+    } else if (typeof durationSeconds === "number" && durationSeconds > 0) {
+      silencedUntil = new Date(Date.now() + durationSeconds * 1000).toISOString();
+    } else {
+      res.status(400).json({
+        status: "error",
+        message: "Provide either a positive numeric durationSeconds or a valid ISO 'until' timestamp",
+      });
+      return;
+    }
+
+    const rule = ruleStore.update(req.params.id, { silencedUntil });
     res.json({ status: "ok", data: withRuntime(rule) });
   } catch (error) {
     if (error instanceof ruleStore.RuleValidationError) {

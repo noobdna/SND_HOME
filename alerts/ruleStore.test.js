@@ -126,6 +126,13 @@ describe("validateRule", () => {
     assert.ok(validateRule({ ...sample, enabled: "yes" }).length > 0);
     assert.deepEqual(validateRule({ ...sample, enabled: false }), []);
   });
+
+  it("accepts silencedUntil as null or a valid ISO 8601 string, rejects anything else", () => {
+    assert.deepEqual(validateRule({ ...sample, silencedUntil: null }), []);
+    assert.deepEqual(validateRule({ ...sample, silencedUntil: new Date().toISOString() }), []);
+    assert.ok(validateRule({ ...sample, silencedUntil: "not-a-date" }).length > 0);
+    assert.ok(validateRule({ ...sample, silencedUntil: 12345 }).length > 0);
+  });
 });
 
 describe("normalizeRule", () => {
@@ -138,6 +145,12 @@ describe("normalizeRule", () => {
     assert.equal(normalized.severity, "warning");
     assert.deepEqual(normalized.channels, []);
     assert.equal(normalized.enabled, true);
+    assert.equal(normalized.silencedUntil, null);
+  });
+
+  it("preserves an explicit silencedUntil", () => {
+    const until = "2026-08-08T20:00:00.000Z";
+    assert.equal(normalizeRule({ ...sample, silencedUntil: until }).silencedUntil, until);
   });
 
   it("preserves explicitly provided values, including falsy ones", () => {

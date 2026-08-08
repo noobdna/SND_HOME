@@ -20,6 +20,11 @@ const RULE_DEFAULTS = Object.freeze({
   severity: "warning",
   channels: [],
   enabled: true,
+  // PHASE5_PLAN.md「Stage 9 — Stretch」Task 9.1。null = 未サイレンス。設定時は
+  // ISO 8601 タイムスタンプ文字列(API/alertオブジェクトの他のタイムスタンプ
+  // フィールドと同じ表現に揃える)— この時刻を過ぎるまで、このルールの通知は
+  // 抑制される(評価・記録は抑制されない。Task 9.2 参照)。
+  silencedUntil: null,
 });
 
 /**
@@ -85,6 +90,12 @@ function validateRule(rule) {
     errors.push("enabled must be a boolean when provided");
   }
 
+  if (rule.silencedUntil !== undefined && rule.silencedUntil !== null) {
+    if (typeof rule.silencedUntil !== "string" || Number.isNaN(Date.parse(rule.silencedUntil))) {
+      errors.push("silencedUntil must be null or a valid ISO 8601 timestamp string when provided");
+    }
+  }
+
   return errors;
 }
 
@@ -110,6 +121,7 @@ function normalizeRule(rule) {
     // 変更した際にストア内部の状態まで書き換わってしまう。常に複製する。
     channels: rule.channels ? [...rule.channels] : [...RULE_DEFAULTS.channels],
     enabled: rule.enabled ?? RULE_DEFAULTS.enabled,
+    silencedUntil: rule.silencedUntil ?? RULE_DEFAULTS.silencedUntil,
   };
 }
 
