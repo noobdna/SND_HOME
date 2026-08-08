@@ -123,6 +123,19 @@ class AlertEngine extends EventEmitter {
   }
 
   /**
+   * ルール1件分のランタイム状態(state/breachSince/... と直近メトリクス値)を破棄する。
+   * `DELETE /api/alerts/rules/:id`(Task 6.2)専用 — PHASE5_PLAN.md の DELETE
+   * エンドポイントの説明に明記されている「its runtime state is discarded too」を
+   * 実装する。ルールIDが存在しない/一度も評価されていない場合も安全な no-op
+   * (Map#delete() は該当キーが無くても例外を投げない)。
+   * @param {string} ruleId
+   */
+  clearRuntime(ruleId) {
+    this.runtimeStates.delete(ruleId);
+    this.lastValues.delete(ruleId);
+  }
+
+  /**
    * monitorEngine の 'update' イベント購読を開始する。
    * 既に購読中の場合は何もしない(二重登録防止 — monitorEngine.start() と同じ方針)。
    * monitorEngine.start() が起動時に "Background polling started" をログ出力するのと
@@ -161,6 +174,8 @@ module.exports = {
   stop: () => engine.stop(),
   // ルール1件の表示用ランタイム情報(Stage 6 の routes/alerts.js が使う読み取り専用API)。
   getRuntime: (ruleId) => engine.getRuntime(ruleId),
+  // ルール削除時(DELETE /api/alerts/rules/:id、Task 6.2)にランタイム状態も破棄する。
+  clearRuntime: (ruleId) => engine.clearRuntime(ruleId),
   // 'alert' イベントの購読/解除。ペイロードは PHASE5_PLAN.md「Notification Plugins」節の
   // 形(alertId/ruleId/ruleName/metric/value/operator/threshold/severity/state/
   // previousState/message/timestamp)。alertHistoryStore と notifierRegistry は
