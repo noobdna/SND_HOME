@@ -9,9 +9,11 @@
 //   DELETE /rules/:id  — ルール削除(ランタイム状態も破棄)
 // Task 6.3 で /active を追加した:
 //   GET /active — FIRING/DOWN/RECOVERING のルールのみ一覧
-// Task 6.4(このコミット)で /history を追加した:
+// Task 6.4 で /history を追加した:
 //   GET /history?limit=N — 最近のアラート状態遷移イベント(既定100件)
-// /rules/:id/test(6.5)、/engine/status(6.7)は未実装。
+// Task 6.5(このコミット)で /rules/:id/test を追加した:
+//   POST /rules/:id/test — 合成アラートを実際に通知先へ送信(実ブリーチ不要)
+// /engine/status(6.7)は未実装。
 // server.js への実際のマウントも Task 6.8 で行う(Stage 6 のタスク分割どおり、
 // 本ファイルの作成とマウントは別タスク)。
 //
@@ -30,6 +32,7 @@ const express = require("express");
 const ruleStore = require("../alerts/ruleStore");
 const alertEngine = require("../alerts/alertEngine");
 const alertHistoryStore = require("../alerts/alertHistoryStore");
+const notifierRegistry = require("../alerts/notifierRegistry");
 const { STATES } = require("../alerts/ruleEvaluator");
 
 const router = express.Router();
@@ -170,6 +173,64 @@ router.delete("/rules/:id", (req, res) => {
     ruleStore.remove(req.params.id);
     alertEngine.clearRuntime(req.params.id);
     res.json({ status: "ok" });
+  } catch (error) {
+    if (error instanceof ruleStore.RuleNotFoundError) {
+      res.status(404).json({ status: "error", message: error.message });
+      return;
+    }
+    res.status(500).json({
+      status: "error",
+      message: error.message || "Unknown error",
+    });
+  }
+});
+
+// PHASE5_PLAN.md「API」節: "Fire a synthetic alert for this rule through its
+// configured channels, without needing a real breach — for verifying
+// notification setup"。notifierRegistry.dispatch() を直接呼ぶ(alertEngine.emit
+// 経由ではない)— alertHistoryStore は alertEngine 自身の 'alert' イベントの購読者
+// (Task 3.5)であり、テスト通知は実インシデントではないため履歴を汚さない。
+// alertEngine のランタイム状態(state/breachSince等)も一切変更しない — 「今
+// 登録されている通知先へ実際に送ってみる」だけの、副作用が閉じた操作。
+//
+// ⚠️ 既知のギャップ(このタスクでは修正しない、フラグのみ): PHASE5_PLAN.md の
+// Threshold Rules 表は rule.channels で通知先を絞り込める設計を明記しているが、
+// notifierRegistry.dispatch() にも alertEngine.js の実配線(Task 3.3/4.3)にも
+// rule.channels によるフィルタリングは実装されていない — 現状は常に「登録済みの
+// 全通知先」に送られる(grep で確認済み: channels は ruleStore.js のスキーマ
+// 検証にしか登場しない)。本エンドポイントはこの既存の(未完成な)実配線と
+// あえて同じ挙動にしている — テストエンドポイントだけを実際より "正しく"
+// 見せかけると、テスト結果が実際の通知挙動を予測しなくなってしまうため。
+// channels フィルタリングの実装は別タスクとして今後フラグする。
+router.post("/rules/:id/test", async (req, res) => {
+  try {
+    const rule = ruleStore.get(req.params.id);
+    const now = new Date().toISOString();
+
+    const alert = {
+      alertId: `${rule.id}:test:${now}`,
+      ruleId: rule.id,
+      ruleName: rule.name,
+      metric: rule.metric,
+      value: rule.threshold,
+      operator: rule.operator,
+      threshold: rule.threshold,
+      severity: rule.severity,
+      state: STATES.FIRING,
+      previousState: STATES.OK,
+      message: `[TEST] ${rule.name}: synthetic test notification (not a real alert) — ${rule.metric} ${rule.operator} ${rule.threshold}`,
+      timestamp: now,
+    };
+
+    await notifierRegistry.dispatch(alert);
+
+    res.json({
+      status: "ok",
+      data: {
+        alert,
+        notifiers: notifierRegistry.list().map((notifier) => notifier.name),
+      },
+    });
   } catch (error) {
     if (error instanceof ruleStore.RuleNotFoundError) {
       res.status(404).json({ status: "error", message: error.message });
