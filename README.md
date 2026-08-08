@@ -21,9 +21,9 @@
 
 Most home labs end up with the same story: a server quietly running in a closet, and no idea whether it's healthy until something breaks. Cloud monitoring SaaS is overkill for a single box, and most self-hosted dashboards are either bloated or dead projects.
 
-**SND@HOME** starts from the opposite direction: a small, dependency-light Express server that polls your machine's vitals on a background loop, keeps a rolling history in memory, and serves it all through a clean REST API and a zero-framework live dashboard. No database. No external services. No build step. Clone it, `npm start`, and you have a live view of your box in your browser.
+**SND@HOME** starts from the opposite direction: a small, dependency-light Express server that polls your machine's vitals on a background loop, keeps a rolling history in memory, and serves it all through a clean REST API and a zero-framework live dashboard — plus a threshold-based alert engine that pages you on Discord, Slack, email, or a generic webhook when something actually needs attention. No database (metrics — alert rules are the one exception, persisted to a JSON file). No external services required. No build step. Clone it, `npm start`, and you have a live, alerting view of your box in your browser.
 
-It's built as a **plugin-based collector architecture** from day one — new metrics are `register()`-ed into the engine without touching the polling loop, the API, or the dashboard. That's the foundation the roadmap below (alerting, notifications, multi-node monitoring) builds on.
+It's built as a **plugin-based architecture** from day one — new metrics are `register()`-ed into the collector engine, new notification channels are `register()`-ed into the notifier registry, both without touching the polling loop, the alert engine, the API, or the dashboard. That's the foundation the roadmap below (multi-node monitoring, Raspberry Pi agents) builds on.
 
 ---
 
@@ -43,23 +43,27 @@ It's built as a **plugin-based collector architecture** from day one — new met
 | 🔌 **REST API** | JSON endpoints for live snapshot, cached snapshot, history, and engine status |
 | 📊 **Real-time Dashboard** | Dependency-free HTML/CSS/JS UI with live progress bars and Canvas-drawn trend charts, auto-refreshing every 3s |
 | ❤️ **Health Check** | Simple `/api/health` endpoint for uptime checks / container orchestration |
+| 🚨 **Alert Engine** | Threshold-based rule evaluator (`OK → FIRING → DOWN → RECOVERING → OK`) with duration/hysteresis/cooldown debouncing, driven by the same 5s poll tick |
+| 📐 **Alert Rules API** | Full CRUD (`/api/alerts/rules`) for threshold rules, persisted to JSON with write-through, seeded with sane disk/CPU/memory defaults on first run |
+| 📜 **Alert History** | Ring-buffer log of every state transition (`/api/alerts/history`), independent of the live metrics history |
+| 💬 **Discord Notifications** | Color-coded embed per alert, via a `fetch` POST to a Discord webhook |
+| 💬 **Slack Notifications** | Plain-text message via a Slack Incoming Webhook |
+| 📧 **Email Notifications** | SMTP delivery via `nodemailer`, configurable host/port/auth |
+| 🪝 **Generic Webhook Notifications** | Raw JSON POST to any endpoint, optionally HMAC-SHA256 signed (`X-SND-Signature`) for PagerDuty/Opsgenie/custom receivers |
+| 🔌 **Notifier Plugin Registry** | Same `register()`-based plugin pattern as collectors — one file per channel, isolated failures via `Promise.allSettled` |
 
 ### Upcoming (roadmap)
 
 | Feature | Target Phase |
 |---|---|
-| 🚨 Alert Engine (threshold-based) | Phase 5 |
-| 💬 Discord Notifications | Phase 5 |
-| 💬 Slack Notifications | Phase 5 |
-| 📧 Email Notifications | Phase 5 |
-| 🔒 SSL Certificate Monitoring | Phase 5 |
-| 🌍 DNS Monitoring | Phase 5 |
+| 🔒 SSL Certificate Monitoring | Future (not yet scheduled) |
+| 🌍 DNS Monitoring | Future (not yet scheduled) |
 | 🐳 Docker Support | Phase 6 |
 | ☁️ Cloudflare Tunnel Integration | Phase 6 |
 | 🍓 Raspberry Pi Agent | Phase 6 |
 | 🕸️ Multi-node Monitoring | Phase 6 |
 
-> Nothing in this table exists in the code yet — see [Roadmap](#-roadmap) for where each item is headed.
+> SSL/DNS monitoring were originally scoped alongside alerting but ended up out of scope for the alerting implementation plan actually built (see [Roadmap](#-roadmap)) — nothing in this table exists in the code yet.
 
 ---
 
@@ -72,9 +76,15 @@ graph TB
     Browser["🌐 Browser Dashboard<br/>index.html + app.js<br/>(vanilla JS, Canvas charts)"]
 
     subgraph Server["⚙️ Express Server — server.js"]
-        API["REST API Routes<br/>/api/system · /api/health<br/>/api/system/latest<br/>/api/monitor/status<br/>/api/system/history"]
+        API["System API Routes<br/>/api/system · /api/health<br/>/api/system/latest<br/>/api/monitor/status<br/>/api/system/history"]
+        AlertAPI["Alert API Routes<br/>/api/alerts/* · /api/notifiers/*"]
         Engine["MonitorEngine<br/>(EventEmitter, polls every 5s)"]
         History["HistoryStore<br/>ring buffer · 720 points"]
+        AlertEngine["AlertEngine<br/>(subscribes to MonitorEngine 'update')"]
+        RuleEval["RuleEvaluator<br/>(pure state machine)"]
+        RuleStore["RuleStore<br/>JSON-persisted rules"]
+        AlertHistory["AlertHistoryStore<br/>ring buffer of transitions"]
+        NotifierReg["NotifierRegistry<br/>Promise.allSettled dispatch"]
     end
 
     Registry["CollectorRegistry<br/>collectAll()"]
@@ -84,6 +94,13 @@ graph TB
         MEM[memoryCollector]
         DISK[diskCollector]
         NET[networkCollector]
+    end
+
+    subgraph Notifiers["📣 Notifier Plugins"]
+        Discord[discordNotifier]
+        Slack[slackNotifier]
+        Email[emailNotifier]
+        Webhook[webhookNotifier]
     end
 
     subgraph Host["🖥️ Host OS"]
@@ -98,6 +115,15 @@ graph TB
     Engine -- "tick every 5s" --> Registry
     Registry --> CPU & MEM & DISK & NET
     Engine -- "records snapshot" --> History
+    Engine -- "emits 'update'" --> AlertEngine
+    AlertEngine --> RuleEval
+    RuleEval --> RuleStore
+    AlertEngine -- "records every transition" --> AlertHistory
+    AlertEngine -- "emits 'alert'" --> NotifierReg
+    NotifierReg --> Discord & Slack & Email & Webhook
+    AlertAPI --> RuleStore
+    AlertAPI --> AlertHistory
+    AlertAPI --> NotifierReg
     CPU --> OSMod
     MEM --> OSMod
     DISK --> DF
@@ -105,7 +131,7 @@ graph TB
     NET --> NETSTAT
 ```
 
-The engine never blocks the API: routes always read from an in-memory cache, and a failed poll (e.g. `df` unavailable) just keeps the previous cached values instead of taking the server down.
+The engine never blocks the API: routes always read from an in-memory cache, and a failed poll (e.g. `df` unavailable) just keeps the previous cached values instead of taking the server down. The alert engine follows the same philosophy — it's a subscriber of `MonitorEngine`'s `update` event, not a second polling loop, so alert state is never more stale than the dashboard itself.
 
 ### Where it's headed
 
@@ -113,17 +139,17 @@ The engine never blocks the API: routes always read from an in-memory cache, and
 graph LR
     subgraph Today["✅ Today"]
         A["Single-node<br/>SND@HOME instance"]
+        B["Alert Engine"]
+        C["Discord / Slack / Email / Webhook"]
     end
 
     subgraph Vision["🔭 Vision — not yet built"]
-        B["Alert Engine"]
-        C["Discord / Slack / Email"]
         D["Raspberry Pi Agents"]
         E["Multi-node Aggregator"]
         F["Cloudflare Tunnel"]
     end
 
-    A -.-> B --> C
+    A --> B --> C
     A -.-> D --> E
     A -.-> F
 ```
@@ -138,7 +164,9 @@ graph LR
 - **Frontend:** Vanilla HTML5 / CSS3 / JavaScript — no frontend framework, no build step, no bundler
 - **Charts:** Hand-rolled Canvas 2D line charts (no chart.js / d3 / external libs)
 - **API:** REST, JSON over HTTP
-- **Data storage:** In-memory (no database) — CPU/disk/network metrics come from Node's `os` module plus the `df` and `netstat` system commands
+- **Data storage:** In-memory (no database) — CPU/disk/network metrics come from Node's `os` module plus the `df` and `netstat` system commands; alert rules are the one thing persisted to disk, as a write-through JSON file
+- **Notifications:** Discord/Slack/generic webhook via Node's built-in `fetch` (no HTTP client dependency); email via [`nodemailer`](https://www.npmjs.com/package/nodemailer) (the only notification-related dependency — Node has no built-in SMTP client)
+- **Testing:** Node's built-in [`node:test`](https://nodejs.org/api/test.html) runner + [`supertest`](https://www.npmjs.com/package/supertest) for HTTP integration tests — no Jest/Mocha, keeping with the dependency-light philosophy
 
 > **Platform note:** the disk and network collectors shell out to `df -k /` and `netstat -ib`. This has been developed and tested on macOS; `df` is portable to Linux, but `netstat -ib` uses BSD-style flags — on Linux the network throughput fields (`rxBytes`/`txBytes`) may come back `null` depending on your `netstat`/`net-tools` version. Everything else works cross-platform.
 
@@ -164,13 +192,15 @@ graph LR
 - [x] **Phase 2 — Core System Monitoring**: CPU, memory, disk, and network collectors + `/api/system`, `/api/health`
 - [x] **Phase 3 — Background Polling Architecture**: always-on `MonitorEngine`, in-memory cache, live dashboard UI
 - [x] **Phase 4 — Historical Metrics & Visualization**: ring-buffer `HistoryStore`, `/api/system/history`, Canvas trend charts
-- [ ] **Phase 5 — Alerting & Notifications** 🔄 *In Progress*
-  - [ ] Threshold-based alert engine
-  - [ ] Discord notifications
-  - [ ] Slack notifications
-  - [ ] Email notifications
-  - [ ] SSL certificate monitoring
-  - [ ] DNS monitoring
+- [x] **Phase 5 — Alerting & Notifications** ✅ *Code complete — live-notification verification pending*
+  - [x] Threshold-based alert engine (`OK → FIRING → DOWN → RECOVERING → OK`, duration/hysteresis/cooldown)
+  - [x] Discord notifications
+  - [x] Slack notifications
+  - [x] Email notifications
+  - [x] Generic webhook notifications (HMAC-signed)
+  - [x] Alert rules REST API (CRUD + active/history/engine-status/test endpoints)
+  - [ ] Manual E2E verification against a real Discord/Slack workspace *(requires live credentials — pending)*
+  - SSL certificate monitoring and DNS monitoring were dropped from this phase's actual implementation scope; see [Upcoming](#-features) for their current status
 - [ ] **Phase 6 — Distributed & Self-Hosted Platform** 📋 *Planned*
   - [ ] Docker support
   - [ ] Cloudflare Tunnel integration
@@ -201,11 +231,29 @@ Environment variables are loaded from a `.env` file via [`dotenv`](https://www.n
 cp .env.example .env
 ```
 
-No `.env` file is required to run the app; every variable has a sensible default. Currently supported:
+No `.env` file is required to run the app; every variable has a sensible default, and every notification channel is off until you explicitly configure it. Currently supported:
 
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | Port the Express server listens on |
+| `ALERTS_ENABLED` | `true` | Documented master switch for the alert engine — **not yet wired to any runtime check** (known gap, see [`PHASE5_PLAN.md`](PHASE5_PLAN.md)); the alert engine currently always runs once started |
+| `ALERTS_RULES_PATH` | `./data/alertRules.json` | Where alert rule definitions are persisted (write-through JSON). On first-ever run (no file yet), seeds from `config/defaultAlertRules.json` instead |
+| `DISCORD_ENABLED` | `true` | Both this and `DISCORD_WEBHOOK_URL` are required for Discord notifications to register |
+| `DISCORD_WEBHOOK_URL` | *(none)* | Discord Incoming Webhook URL |
+| `SLACK_ENABLED` | `true` | Both this and `SLACK_WEBHOOK_URL` are required for Slack notifications to register |
+| `SLACK_WEBHOOK_URL` | *(none)* | Slack Incoming Webhook URL |
+| `EMAIL_ENABLED` | `false` | This plus `EMAIL_SMTP_HOST` and `EMAIL_TO` are required for email notifications to register |
+| `EMAIL_SMTP_HOST` | *(none)* | SMTP server hostname |
+| `EMAIL_SMTP_PORT` | `587` | SMTP server port |
+| `EMAIL_SMTP_SECURE` | `false` | Use implicit TLS (`true` for port 465-style connections) |
+| `EMAIL_SMTP_USER` / `EMAIL_SMTP_PASS` | *(none)* | Optional SMTP auth — only used if **both** are set (some internal relays don't require auth) |
+| `EMAIL_FROM` | `alerts@sndhome.local` | From address on outgoing alert emails |
+| `EMAIL_TO` | *(none)* | Recipient address |
+| `WEBHOOK_ENABLED` | `false` | Both this and `WEBHOOK_URL` are required for the generic webhook notifier to register |
+| `WEBHOOK_URL` | *(none)* | Any HTTP endpoint to receive the raw alert JSON |
+| `WEBHOOK_SECRET` | *(none)* | If set, signs the request body with HMAC-SHA256, sent as `X-SND-Signature` |
+
+> Recommend testing the email notifier against a sandbox SMTP provider (e.g. [Ethereal](https://ethereal.email), Mailtrap) rather than a real inbox.
 
 You can also override any variable inline without a `.env` file:
 
@@ -247,6 +295,19 @@ All endpoints are served from the running Express app; only endpoints that exist
 | `GET` | `/api/system/history?limit=N` | Returns up to `N` recent history points (default `120`) used for trend charts |
 | `GET` | `/api/monitor/status` | Returns the polling engine's own status (running, interval, last update, uptime) |
 | `GET` | `/api/health` | Simple liveness check — `{ "status": "ok" }` |
+| `GET` | `/api/alerts/rules` | List all alert rules with their current runtime state |
+| `GET` | `/api/alerts/rules/:id` | Get a single rule + its runtime state |
+| `POST` | `/api/alerts/rules` | Create a new rule (body validated against the rule schema) |
+| `PUT` | `/api/alerts/rules/:id` | Update an existing rule (partial merge) |
+| `DELETE` | `/api/alerts/rules/:id` | Delete a rule (its runtime state is discarded too) |
+| `GET` | `/api/alerts/active` | List only rules currently `FIRING`, `DOWN`, or `RECOVERING` |
+| `GET` | `/api/alerts/history?limit=N` | Recent alert state-transition events (default `100`) |
+| `POST` | `/api/alerts/rules/:id/test` | Fire a synthetic `[TEST]` alert for one rule through its notifiers, without needing a real breach |
+| `GET` | `/api/alerts/engine/status` | Alert engine's own status (running, rule count, active alert count, last evaluated) |
+| `GET` | `/api/notifiers` | List all known notifier channels and whether each is live-configured |
+| `POST` | `/api/notifiers/:name/test` | Send a `[TEST]` message through one specific notifier channel |
+
+> ⚠️ **No authentication yet.** The mutating alert/notifier endpoints (`POST`/`PUT`/`DELETE`) have no auth middleware — this repo doesn't have one built yet. Fine for a single-user homelab on a trusted network; do not expose these endpoints to the open internet as-is. See [`PHASE5_PLAN.md`](PHASE5_PLAN.md) for the tracked follow-up.
 
 <details>
 <summary><code>GET /api/system</code> — example response</summary>
@@ -313,26 +374,108 @@ All endpoints are served from the running Express app; only endpoints that exist
 ```
 </details>
 
+<details>
+<summary><code>GET /api/alerts/rules</code> — example response</summary>
+
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "id": "disk-root-critical",
+      "name": "Root disk usage critical",
+      "metric": "disk.percent",
+      "operator": ">=",
+      "threshold": 90,
+      "clearThreshold": 80,
+      "duration": 30,
+      "hysteresis": 60,
+      "cooldown": 1800,
+      "severity": "critical",
+      "channels": [],
+      "enabled": true,
+      "runtime": {
+        "state": "DOWN",
+        "value": 91.4,
+        "since": "2026-08-07T09:58:12.000Z",
+        "lastNotifiedAt": "2026-08-07T09:58:42.000Z"
+      }
+    }
+  ]
+}
+```
+</details>
+
+<details>
+<summary><code>GET /api/alerts/engine/status</code> — example response</summary>
+
+```json
+{
+  "running": true,
+  "rulesCount": 3,
+  "activeAlertsCount": 1,
+  "lastEvaluatedAt": "2026-08-07T09:58:42.000Z"
+}
+```
+</details>
+
+<details>
+<summary><code>GET /api/notifiers</code> — example response</summary>
+
+```json
+{
+  "status": "ok",
+  "data": [
+    { "name": "discord", "configured": true },
+    { "name": "slack", "configured": false },
+    { "name": "email", "configured": false },
+    { "name": "webhook", "configured": true }
+  ]
+}
+```
+</details>
+
 ---
 
 ## 📁 Project Structure
 
 ```
 SND_HOME/
-├── collectors/              # Metric collector plugins (name + collect())
-│   ├── cpuCollector.js       # CPU usage % (sampled) + core count
-│   ├── memoryCollector.js    # Used / total / percent memory
-│   ├── diskCollector.js      # Used / total / percent disk (via df -k /)
-│   └── networkCollector.js   # Interfaces, local IP, rx/tx bytes (via netstat -ib)
+├── collectors/                  # Metric collector plugins (name + collect())
+│   ├── cpuCollector.js           # CPU usage % (sampled) + core count
+│   ├── memoryCollector.js        # Used / total / percent memory
+│   ├── diskCollector.js          # Used / total / percent disk (via df -k /)
+│   └── networkCollector.js       # Interfaces, local IP, rx/tx bytes (via netstat -ib)
 ├── monitor/
-│   ├── collectorRegistry.js  # Registers collectors, runs collectAll()
-│   ├── monitorEngine.js      # EventEmitter-based background polling loop (5s)
-│   └── historyStore.js       # In-memory ring buffer (720 points) for trend data
-├── public/                   # Static dashboard, served by express.static
-│   ├── index.html            # Dashboard markup
-│   ├── app.js                # Fetch loop, rendering, Canvas line charts
-│   └── style.css             # Dark, GitHub-inspired theme
-├── server.js                 # Express app, routes, startup/shutdown
+│   ├── collectorRegistry.js      # Registers collectors, runs collectAll()
+│   ├── monitorEngine.js          # EventEmitter-based background polling loop (5s)
+│   └── historyStore.js           # In-memory ring buffer (720 points) for trend data
+├── alerts/
+│   ├── ruleEvaluator.js          # Pure state-machine transition logic (no I/O)
+│   ├── ruleStore.js              # CRUD + JSON-file persistence for alert rules
+│   ├── alertEngine.js            # Subscribes to MonitorEngine 'update', drives evaluation
+│   ├── alertHistoryStore.js      # Ring buffer of alert state-transition events
+│   └── notifierRegistry.js       # Notifier plugin registry (register/list/dispatch)
+├── notifiers/                    # Notification plugins (name + configured() + notify())
+│   ├── discordNotifier.js
+│   ├── slackNotifier.js
+│   ├── emailNotifier.js          # Uses nodemailer
+│   └── webhookNotifier.js        # Optional HMAC-SHA256 request signing
+├── routes/
+│   ├── system.js                 # /api/system, /api/health, /api/system/*
+│   ├── monitor.js                # /api/monitor/status
+│   ├── alerts.js                 # /api/alerts/* (rules CRUD, active, history, test, status)
+│   └── notifiers.js              # /api/notifiers/*
+├── config/
+│   └── defaultAlertRules.json    # Seed rules loaded on first-ever run
+├── data/                         # Runtime-persisted alert rules (gitignored, created at runtime)
+│   └── .gitkeep
+├── public/                       # Static dashboard, served by express.static
+│   ├── index.html                # Dashboard markup
+│   ├── app.js                    # Fetch loop, rendering, Canvas line charts
+│   └── style.css                 # Dark, GitHub-inspired theme
+├── server.js                     # Express app, routes, startup/shutdown
+├── .env.example                  # Documents every supported environment variable
 ├── package.json
 └── package-lock.json
 ```
@@ -346,11 +489,11 @@ SND@HOME's long-term goal is to become a genuinely **AI-powered, self-hosted inf
 The collector-plugin and event-driven engine design already in place (`collectorRegistry.register()`, `MonitorEngine`'s `update`/`error` events) exists specifically so the next layers can be added *without* rewriting the core:
 
 - **Self-hosted first** — your metrics, your box, no third-party cloud dependency.
-- **Alerting as a subscriber** — the engine already emits `update`/`error` events; an alert engine is a listener away, not a rewrite.
+- **Alerting as a subscriber** — proven out in Phase 5: `AlertEngine` is just another listener on `MonitorEngine`'s `update` event, added without touching `monitorEngine.js` at all. Notifier channels follow the same pattern one level down — `notifierRegistry.dispatch()` fans out to `discordNotifier`/`slackNotifier`/`emailNotifier`/`webhookNotifier` the same way `collectorRegistry.collectAll()` fans out to the metric collectors.
 - **AI-assisted insight** — once history accumulates, anomaly detection and natural-language health summaries ("your disk usage has been trending up 3%/day") become possible on top of the existing `HistoryStore`, without changing how metrics are collected.
 - **Beyond one box** — Raspberry Pi agents and multi-node aggregation extend the same collector/engine model across a whole home network.
 
-None of this exists yet — it's the direction the architecture is deliberately built to support. See [Roadmap](#️-roadmap) for the concrete, incremental path there.
+Alerting is the first of these proven out end-to-end; AI-assisted insight and multi-node aggregation don't exist yet — they're the direction the architecture is deliberately built to support next. See [Roadmap](#️-roadmap) for the concrete, incremental path there.
 
 ---
 
@@ -359,9 +502,9 @@ None of this exists yet — it's the direction the architecture is deliberately 
 Contributions are very welcome — this project is still early, and there's a lot of surface area to help with.
 
 1. **Fork** the repository and create a branch off `main`: `git checkout -b feat/your-feature`
-2. **Keep collectors self-contained** — a new metric should be a new file in `collectors/` exporting `{ name, collect() }` and registered in `collectorRegistry.js`. Avoid touching `monitorEngine.js` unless you're changing the polling model itself.
+2. **Keep plugins self-contained** — a new metric should be a new file in `collectors/` exporting `{ name, collect() }` and registered in `collectorRegistry.js`; a new notification channel should be a new file in `notifiers/` exporting `{ name, configured(), notify(alert) }` and registered in `notifierRegistry.js`. Avoid touching `monitorEngine.js`/`alertEngine.js` unless you're changing the core engine model itself.
 3. **Match the existing style** — CommonJS modules, small focused functions, comments only where the *why* isn't obvious from the code.
-4. **Test manually** — there's no automated test suite yet (`npm test` is a stub), so please describe how you verified your change in the PR description. Adding real tests is itself a great first contribution.
+4. **Run the test suite** — `npm test` runs the full `node:test` suite (state machine, persistence, notifiers, HTTP routes). Add tests alongside new code (`x.js` → `x.test.js`) rather than relying on manual verification.
 5. **Open a PR** against `main` with a clear description of what changed and why.
 
 Found a bug or have an idea? Open an issue — even rough ones are useful.
