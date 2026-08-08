@@ -45,6 +45,11 @@ class AlertEngine extends EventEmitter {
     // 一部ではない — ruleEvaluator.js のドキュメント通りの状態形をあえて汚さない)。
     // GET /api/alerts/rules の runtime.value(Stage 6)専用の、表示用の副次情報。
     this.lastValues = new Map();
+    // monitorEngine の 'update' を最後に処理した時刻(ISO文字列)。
+    // GET /api/alerts/engine/status の lastEvaluatedAt(Task 6.7)専用 —
+    // monitorEngine.js の lastUpdated と同じ設計(ティックのたびに更新、
+    // 対象ルールの有無に関わらず「最後に処理を試みた時刻」を表す)。
+    this.lastEvaluatedAt = null;
   }
 
   /**
@@ -65,6 +70,7 @@ class AlertEngine extends EventEmitter {
    */
   handleUpdate(snapshot) {
     const now = Date.now();
+    this.lastEvaluatedAt = new Date(now).toISOString();
     const enabledRules = ruleStore.list().filter((rule) => rule.enabled);
 
     for (const rule of enabledRules) {
@@ -136,6 +142,32 @@ class AlertEngine extends EventEmitter {
   }
 
   /**
+   * アラートエンジン自体の稼働状態を返す(PHASE5_PLAN.md `GET /api/alerts/engine/status`
+   * — "mirrors /api/monitor/status" と明記されている通り、monitorEngine.getStatus() と
+   * 同じ「自己完結した getStatus()」設計に揃える。ルート層(routes/alerts.js)は
+   * 何も計算せず、この戻り値をそのまま返すだけでよい)。
+   *
+   * `activeAlertsCount` は `GET /api/alerts/active`(Task 6.3)と同じ定義
+   * (`runtime.state !== STATES.OK`)を使う — `this.runtimeStates` を直接数えるより
+   * 遅いが、`getRuntime()` を経由することで両エンドポイントの「アクティブ」の定義が
+   * 決してズレない(未評価ルールの createInitialState() フォールバックも含めて一致する)。
+   * @returns {{ running: boolean, rulesCount: number, activeAlertsCount: number, lastEvaluatedAt: string|null }}
+   */
+  getStatus() {
+    const rules = ruleStore.list();
+    const activeAlertsCount = rules.filter(
+      (rule) => this.getRuntime(rule.id).state !== ruleEvaluator.STATES.OK
+    ).length;
+
+    return {
+      running: this.listening,
+      rulesCount: rules.length,
+      activeAlertsCount,
+      lastEvaluatedAt: this.lastEvaluatedAt,
+    };
+  }
+
+  /**
    * monitorEngine の 'update' イベント購読を開始する。
    * 既に購読中の場合は何もしない(二重登録防止 — monitorEngine.start() と同じ方針)。
    * monitorEngine.start() が起動時に "Background polling started" をログ出力するのと
@@ -176,6 +208,8 @@ module.exports = {
   getRuntime: (ruleId) => engine.getRuntime(ruleId),
   // ルール削除時(DELETE /api/alerts/rules/:id、Task 6.2)にランタイム状態も破棄する。
   clearRuntime: (ruleId) => engine.clearRuntime(ruleId),
+  // アラートエンジン自体の稼働状態(GET /api/alerts/engine/status、Task 6.7)。
+  getStatus: () => engine.getStatus(),
   // 'alert' イベントの購読/解除。ペイロードは PHASE5_PLAN.md「Notification Plugins」節の
   // 形(alertId/ruleId/ruleName/metric/value/operator/threshold/severity/state/
   // previousState/message/timestamp)。alertHistoryStore と notifierRegistry は

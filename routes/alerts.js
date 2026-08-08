@@ -11,14 +11,19 @@
 //   GET /active — FIRING/DOWN/RECOVERING のルールのみ一覧
 // Task 6.4 で /history を追加した:
 //   GET /history?limit=N — 最近のアラート状態遷移イベント(既定100件)
-// Task 6.5(このコミット)で /rules/:id/test を追加した:
+// Task 6.5 で /rules/:id/test を追加した:
 //   POST /rules/:id/test — 合成アラートを実際に通知先へ送信(実ブリーチ不要)
-// /engine/status(6.7)は未実装。
-// server.js への実際のマウントも Task 6.8 で行う(Stage 6 のタスク分割どおり、
+// Task 6.7(このコミット)で /engine/status を追加した:
+//   GET /engine/status — アラートエンジン自体の稼働状態
+// server.js への実際のマウントは Task 6.8 で行う(Stage 6 のタスク分割どおり、
 // 本ファイルの作成とマウントは別タスク)。
 //
 // レスポンス形は既存の routes/system.js・routes/monitor.js と同じ envelope
-// (`{ status: "ok", data }` / `{ status: "error", message }`)に揃える。
+// (`{ status: "ok", data }` / `{ status: "error", message }`)に揃えるが、
+// GET /engine/status だけは例外 — PHASE5_PLAN.md が明示的に
+// "mirrors /api/monitor/status" と書いており、routes/monitor.js の
+// GET /status は envelope で包まず生のオブジェクトをそのまま返す設計のため、
+// それに合わせる(本ファイル内で唯一 envelope を使わないエンドポイント)。
 //
 // ⚠️ SECURITY TODO — 認証が未実装: PHASE5_PLAN.md の「API」節は「これらは本プロジェクト
 // 最初の変更系(POST/PUT/DELETE)エンドポイントであり、読み取り専用の /api/system/* が
@@ -236,6 +241,21 @@ router.post("/rules/:id/test", async (req, res) => {
       res.status(404).json({ status: "error", message: error.message });
       return;
     }
+    res.status(500).json({
+      status: "error",
+      message: error.message || "Unknown error",
+    });
+  }
+});
+
+// PHASE5_PLAN.md「API」節: "{ running, rulesCount, activeAlertsCount,
+// lastEvaluatedAt } — mirrors /api/monitor/status"。routes/monitor.js の
+// GET /status と同じく、alertEngine.getStatus() の戻り値をそのまま返す
+// (envelope で包まない — このファイル唯一の例外、上部コメント参照)。
+router.get("/engine/status", (req, res) => {
+  try {
+    res.json(alertEngine.getStatus());
+  } catch (error) {
     res.status(500).json({
       status: "error",
       message: error.message || "Unknown error",
