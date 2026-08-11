@@ -259,12 +259,23 @@ function pingHost(ip, { timeoutMs = DEFAULT_PING_TIMEOUT_MS, execFileImpl = exec
  * pingHost() と同じ理由で、両コマンドとも execFile の `timeout` オプションで
  * 強制タイムアウトさせる(ファイル冒頭コメント参照 — `arp -a` の逆引きDNSに
  * よるハングでスキャン全体が永久に止まるのを防ぐ)。
+ *
+ * `-n`(numeric、シンボリック名解決をしない)は必須のフラグであって単なる
+ * 最適化ではない: 実機(macOS)で確認したところ、`-n` 無しの `arp -a` は
+ * 到達不能な逆引きDNSリゾルバへの問い合わせでホスト1件あたり数百ms〜
+ * 数秒ブロックし、家庭内LAN程度の台数でも合計で `arp -an`(14ms)の
+ * 1000倍近く(実測13秒)かかることがあった。この所要時間は
+ * DEFAULT_ARP_TIMEOUT_MS(2秒)を大きく超えるため、`-n` を付けない場合
+ * `execFile` のタイムアウトで毎回強制終了させられ、`readArpTable()` は
+ * (`ip neigh show` も無いmacOSでは)常に空のMapへフォールバックしていた
+ * -- 実際に検出された全オンライン機器のMACが解決できず台帳に一切載らない、
+ * という不具合として観測された(内部識別番号: 台数不一致調査)。
  * @param {{ timeoutMs?: number, execFileImpl?: Function }} [options]
  * @returns {Promise<Map<string, string>>}
  */
 function readArpTable({ timeoutMs = DEFAULT_ARP_TIMEOUT_MS, execFileImpl = execFile } = {}) {
   return new Promise((resolve) => {
-    execFileImpl("arp", ["-a"], { timeout: timeoutMs }, (error, stdout) => {
+    execFileImpl("arp", ["-an"], { timeout: timeoutMs }, (error, stdout) => {
       if (!error && stdout) {
         resolve(parseArpTable(stdout));
         return;

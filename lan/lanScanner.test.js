@@ -248,6 +248,17 @@ describe("readArpTable (execFile injected, no real network)", () => {
     assert.equal(table.size, 0);
   });
 
+  it("CRITICAL: calls `arp -an`, not plain `arp -a` (regression: reverse-DNS hang) -- `-a` alone tries to resolve each IP to a hostname, and on a real machine with an unreachable/slow reverse-DNS resolver for private addresses this took 13s for one call, far past DEFAULT_ARP_TIMEOUT_MS (2s); every call was killed by the timeout before producing output, so readArpTable() always fell back to an empty Map, and no LAN device ever got a resolved MAC. `-n` (numeric, no hostname resolution) took 14ms for the same call and returned correct data -- see this file's git history for the measurement", async () => {
+    let captured;
+    const fakeExecFile = (cmd, args, opts, cb) => {
+      captured = { cmd, args };
+      cb(null, "? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]");
+    };
+    await readArpTable({ execFileImpl: fakeExecFile });
+    assert.equal(captured.cmd, "arp");
+    assert.deepEqual(captured.args, ["-an"]);
+  });
+
   it("passes a timeout option on both the arp call and the ip neigh fallback (regression: unbounded hang)", async () => {
     const captured = [];
     const fakeExecFile = (cmd, args, opts, cb) => {
