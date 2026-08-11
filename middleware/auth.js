@@ -14,6 +14,27 @@
 // しない)— notifiers/*.js の configured() が既に確立している「毎回 process.env を
 // 読む」規約と同じで、これによりテストが beforeEach/afterEach で process.env を
 // 差し替えても正しく反映される。
+const crypto = require("crypto");
+
+// 単純な `token !== apiKey`(文字列の厳密不等価)は、最初に異なるバイトが
+// 見つかった時点で処理を打ち切る非定数時間比較 — API_KEY をこのサーバー
+// より信頼度の低いネットワーク越しに公開する運用(README/API節が想定する
+// 「localhost/自宅LANを超えて公開する場合」)では、応答時間の差からAPI_KEYを
+// 1バイトずつ推測されるタイミング攻撃の理論的な糸口になりうる。
+// crypto.timingSafeEqual() で定数時間比較する。ただし同関数は長さの異なる
+// バッファを渡すと例外を投げるため、長さが違う場合はそれ自体で「不一致」と
+// 早期returnする(トークン長の違いだけでは、内容そのものを1バイトずつ
+// 推測できるタイミング攻撃の主要な糸口にはならないため、許容できるトレード
+// オフとする — 多くの定数時間比較実装が採用する標準的なパターン)。
+function safeCompare(a, b) {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 function requireAuth(req, res, next) {
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
@@ -26,7 +47,7 @@ function requireAuth(req, res, next) {
 
   const header = req.get("Authorization") || "";
   const [scheme, token] = header.split(" ");
-  if (scheme !== "Bearer" || token !== apiKey) {
+  if (scheme !== "Bearer" || typeof token !== "string" || !safeCompare(token, apiKey)) {
     res.status(401).json({ status: "error", message: "Unauthorized" });
     return;
   }

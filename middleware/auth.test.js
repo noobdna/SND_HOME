@@ -48,4 +48,16 @@ describe("requireAuth", () => {
     const res = await request(app).get("/protected").set("Authorization", "Bearer secret-token");
     assert.equal(res.status, 200);
   });
+
+  it("401s (not a 500) when the Authorization header is 'Bearer' with no token at all (regression: timing-safe compare must not throw on a missing token)", async () => {
+    process.env.API_KEY = "secret-token";
+    const res = await request(app).get("/protected").set("Authorization", "Bearer");
+    assert.equal(res.status, 401);
+  });
+
+  it("401s (not a 500) when the Bearer token is a different length than API_KEY (regression: timingSafeEqual throws on length mismatch)", async () => {
+    process.env.API_KEY = "secret-token";
+    const res = await request(app).get("/protected").set("Authorization", "Bearer short");
+    assert.equal(res.status, 401);
+  });
 });
