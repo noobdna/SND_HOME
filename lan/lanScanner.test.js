@@ -215,7 +215,7 @@ describe("pingHost (execFile injected, no real network)", () => {
 
 describe("readArpTable (execFile injected, no real network)", () => {
   it("uses arp -a's output when arp succeeds", async () => {
-    const fakeExecFile = (cmd, args, cb) => {
+    const fakeExecFile = (cmd, args, opts, cb) => {
       if (cmd === "arp") {
         cb(null, "? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]");
         return;
@@ -227,7 +227,7 @@ describe("readArpTable (execFile injected, no real network)", () => {
   });
 
   it("falls back to `ip neigh show` when arp fails (e.g. command not found)", async () => {
-    const fakeExecFile = (cmd, args, cb) => {
+    const fakeExecFile = (cmd, args, opts, cb) => {
       if (cmd === "arp") {
         cb(new Error("command not found"));
         return;
@@ -243,9 +243,27 @@ describe("readArpTable (execFile injected, no real network)", () => {
   });
 
   it("resolves to an empty map when both arp and ip neigh fail", async () => {
-    const fakeExecFile = (cmd, args, cb) => cb(new Error("nope"));
+    const fakeExecFile = (cmd, args, opts, cb) => cb(new Error("nope"));
     const table = await readArpTable({ execFileImpl: fakeExecFile });
     assert.equal(table.size, 0);
+  });
+
+  it("passes a timeout option on both the arp call and the ip neigh fallback (regression: unbounded hang)", async () => {
+    const captured = [];
+    const fakeExecFile = (cmd, args, opts, cb) => {
+      captured.push({ cmd, opts });
+      if (cmd === "arp") {
+        cb(new Error("command not found"));
+        return;
+      }
+      cb(null, "192.168.1.5 dev eth0 lladdr 11:22:33:44:55:66 REACHABLE");
+    };
+    await readArpTable({ timeoutMs: 500, execFileImpl: fakeExecFile });
+    assert.equal(captured.length, 2);
+    assert.equal(captured[0].cmd, "arp");
+    assert.equal(captured[0].opts.timeout, 500);
+    assert.equal(captured[1].cmd, "ip");
+    assert.equal(captured[1].opts.timeout, 500);
   });
 });
 

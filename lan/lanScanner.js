@@ -25,12 +25,23 @@
 //   - MACアドレス突き合わせは `arp -a` を第一候補としつつ、
 //     コマンドが無い環境(net-tools未導入の最小Linux)向けに
 //     `ip neigh show`(iproute2)へフォールバックする。
+//   - `arp -a`/`ip neigh show` にも同様に execFile の `timeout` オプションを
+//     課す。`arp -a` は環境によっては逆引きDNSを試みてブロックすることが
+//     あり(到達不能なリゾルバがあると特に顕著)、タイムアウト無しでは
+//     このPromiseが永久に解決せず、lanEngine.js の再入防止ガード
+//     (`this.scanning`)が張られたまま二度と外れなくなる — 以後スキャンが
+//     全く走らなくなるサイレント障害になるため、必ず設定する。
 const { execFile } = require("child_process");
 const os = require("os");
 const { lookupVendor } = require("./ouiLookup");
 
 const DEFAULT_CONCURRENCY = 32;
 const DEFAULT_PING_TIMEOUT_MS = 1000;
+// arp -a / ip neigh show はローカルのカーネル近隣テーブルを読むだけの操作で
+// 本来は瞬時に終わるはずだが、環境によっては逆引きDNSでブロックしうる
+// (ファイル冒頭コメント参照)。通常時の実行時間に対して十分に余裕を持たせつつ、
+// ハング時にはスキャン全体を確実に止める値として2秒に設定。
+const DEFAULT_ARP_TIMEOUT_MS = 2000;
 // 誤ったネットマスク検出等で意図せず広大な範囲をスキャンしてしまう事故を防ぐ
 // 安全弁。/22相当(1024ホスト)まで許容 — 一般的な家庭内LAN(/24=254ホスト)には
 // 十分な余裕がある。
@@ -235,17 +246,20 @@ function pingHost(ip, { timeoutMs = DEFAULT_PING_TIMEOUT_MS, execFileImpl = exec
  * OSのARPテーブル(またはフォールバックとして ip neigh show)を読み、
  * IP -> MAC の対応表を返す。両方失敗した場合は空のMap
  * (MACなしで続行するグレースフルデグレード)。
- * @param {{ execFileImpl?: Function }} [options]
+ * pingHost() と同じ理由で、両コマンドとも execFile の `timeout` オプションで
+ * 強制タイムアウトさせる(ファイル冒頭コメント参照 — `arp -a` の逆引きDNSに
+ * よるハングでスキャン全体が永久に止まるのを防ぐ)。
+ * @param {{ timeoutMs?: number, execFileImpl?: Function }} [options]
  * @returns {Promise<Map<string, string>>}
  */
-function readArpTable({ execFileImpl = execFile } = {}) {
+function readArpTable({ timeoutMs = DEFAULT_ARP_TIMEOUT_MS, execFileImpl = execFile } = {}) {
   return new Promise((resolve) => {
-    execFileImpl("arp", ["-a"], (error, stdout) => {
+    execFileImpl("arp", ["-a"], { timeout: timeoutMs }, (error, stdout) => {
       if (!error && stdout) {
         resolve(parseArpTable(stdout));
         return;
       }
-      execFileImpl("ip", ["neigh", "show"], (ipError, ipStdout) => {
+      execFileImpl("ip", ["neigh", "show"], { timeout: timeoutMs }, (ipError, ipStdout) => {
         if (!ipError && ipStdout) {
           resolve(parseIpNeighTable(ipStdout));
           return;
@@ -306,6 +320,7 @@ async function mapWithConcurrency(items, limit, fn) {
  *   cidr?: string,
  *   concurrency?: number,
  *   pingTimeoutMs?: number,
+ *   arpTimeoutMs?: number,
  *   maxHosts?: number,
  *   pingHostImpl?: Function,
  *   readArpTableImpl?: Function,
@@ -330,6 +345,7 @@ async function scan(options = {}) {
     cidr: cidrOption,
     concurrency = DEFAULT_CONCURRENCY,
     pingTimeoutMs = DEFAULT_PING_TIMEOUT_MS,
+    arpTimeoutMs = DEFAULT_ARP_TIMEOUT_MS,
     maxHosts = MAX_HOSTS,
     pingHostImpl = pingHost,
     readArpTableImpl = readArpTable,
@@ -347,7 +363,7 @@ async function scan(options = {}) {
   const hosts = enumerateHosts(cidr, { maxHosts });
   const aliveFlags = await mapWithConcurrency(hosts, concurrency, (ip) => pingHostImpl(ip, { timeoutMs: pingTimeoutMs }));
   const pingedIps = new Set(hosts.filter((_, i) => aliveFlags[i]));
-  const arpTable = await readArpTableImpl();
+  const arpTable = await readArpTableImpl({ timeoutMs: arpTimeoutMs });
 
   // ARPテーブルはスキャン範囲外のIP(例: VPNトンネル越しの通信相手や、
   // 別サブネットの残留エントリ)を含みうるため、このスキャンの対象範囲
