@@ -6,7 +6,13 @@
 // 収集に成功するたびhistoryStoreにも記録し、トレンドチャートや
 // 将来のアラート評価(閾値監視等)が履歴を参照できるようにする。
 const EventEmitter = require("events");
-const { collectAll } = require("./collectorRegistry");
+// collectorRegistry はモジュールオブジェクトごと require する(collectAll を
+// 分割代入で取り出さない)-- lan/lanEngine.js が lanScanner を同じ流儀で
+// requireしているのと同じ理由: テストが lan/lanScanner.test.js と同じ手法
+// (collectorRegistry.collectAll を monkey-patch)で実ネットワーク/実コマンドに
+// 触れずに検証できるようにするため(分割代入だとテスト側の差し替えが
+// このファイル内の呼び出しに反映されない)。
+const collectorRegistry = require("./collectorRegistry");
 const historyStore = require("./historyStore");
 
 const DEFAULT_INTERVAL_MS = 5000;
@@ -28,7 +34,7 @@ class MonitorEngine extends EventEmitter {
    */
   async tick() {
     try {
-      const data = await collectAll();
+      const data = await collectorRegistry.collectAll();
       this.latestSystemInfo = data;
       this.lastUpdated = new Date().toISOString();
       historyStore.record(data);
@@ -91,4 +97,9 @@ module.exports = {
   // 将来の購読者(EventCollector, WebSocket通知層等)向けのフック
   on: (eventName, listener) => engine.on(eventName, listener),
   off: (eventName, listener) => engine.off(eventName, listener),
+  // テスト用: モジュール共有のシングルトン(上記のエクスポート群が操作する
+  // engine)とは別に、独立したインスタンスを都度生成してテストできるように
+  // クラス自体もエクスポートする — lan/lanEngine.js の同名エクスポートと
+  // 同じ理由(複数テストが同じタイマー状態を共有して干渉し合うことを避ける)。
+  MonitorEngine,
 };

@@ -3,9 +3,16 @@
 // Node標準モジュールにディスク使用量APIが無いため、`df -k /` を実行して解析する。
 const { execFile } = require("child_process");
 
-function runDf() {
+/**
+ * `df -k /` を実行する。execFileImpl は lan/lanScanner.js の pingHost()/
+ * readArpTable() と同じ依存性注入パターン -- 実コマンドを叩かずテストできる
+ * ようにするため(既定は本物の execFile)。
+ * @param {{ execFileImpl?: Function }} [options]
+ * @returns {Promise<string>}
+ */
+function runDf({ execFileImpl = execFile } = {}) {
   return new Promise((resolve, reject) => {
-    execFile("df", ["-k", "/"], (error, stdout) => {
+    execFileImpl("df", ["-k", "/"], (error, stdout) => {
       if (error) {
         reject(error);
         return;
@@ -42,6 +49,8 @@ function parseDfOutput(stdout) {
 
 module.exports = {
   name: "disk",
+  parseDfOutput,
+  runDf,
   async collect() {
     const stdout = await runDf();
     return parseDfOutput(stdout);
