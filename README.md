@@ -168,6 +168,7 @@ graph LR
 - **Data storage:** In-memory (no database) — CPU/disk/network metrics come from Node's `os` module plus the `df` and `netstat` system commands; alert rules are the one thing persisted to disk, as a write-through JSON file
 - **Notifications:** Discord/Slack/generic webhook via Node's built-in `fetch` (no HTTP client dependency); email via [`nodemailer`](https://www.npmjs.com/package/nodemailer) (the only notification-related dependency — Node has no built-in SMTP client)
 - **Testing:** Node's built-in [`node:test`](https://nodejs.org/api/test.html) runner + [`supertest`](https://www.npmjs.com/package/supertest) for HTTP integration tests — no Jest/Mocha, keeping with the dependency-light philosophy
+- **Containerization:** Docker, single-stage build from `node:20-bookworm-slim` (not Alpine — see [`PHASE6_DOCKER_PLAN.md`](PHASE6_DOCKER_PLAN.md) for why) — optional, `npm start` remains the primary supported path
 
 > **Platform note:** the disk and network collectors shell out to `df -k /` and `netstat -ib`. This has been developed and tested on macOS; `df` is portable to Linux, but `netstat -ib` uses BSD-style flags — on Linux the network throughput fields (`rxBytes`/`txBytes`) may come back `null` depending on your `netstat`/`net-tools` version. Everything else works cross-platform.
 
@@ -203,7 +204,7 @@ graph LR
   - [ ] Manual E2E verification against a real Discord/Slack workspace *(requires live credentials — pending)*
   - SSL certificate monitoring and DNS monitoring were dropped from this phase's actual implementation scope; see [Upcoming](#-features) for their current status
 - [ ] **Phase 6 — Distributed & Self-Hosted Platform** 📋 *Planned*
-  - [ ] Docker support
+  - [ ] Docker support — `Dockerfile`/`docker-compose.yml`/`.dockerignore` written per [`PHASE6_DOCKER_PLAN.md`](PHASE6_DOCKER_PLAN.md); `npm test` unaffected (356/356) since no application code changed. **Not yet checked off**: this was implemented on a machine without Docker installed, so the actual `docker build`/`docker compose up`/real-LAN parity check (the plan's own Stage 4, held to the same "verify against a real network, not mocked" bar as `dc1138f`) has not been run — needs that verification on a Docker-capable host before this is genuinely done, not just written
   - [ ] Cloudflare Tunnel integration
   - [ ] Raspberry Pi agent
   - [ ] Multi-node monitoring
@@ -264,6 +265,24 @@ You can also override any variable inline without a `.env` file:
 ```bash
 PORT=4000 npm start
 ```
+
+### 🐳 Docker
+
+```bash
+cp .env.example .env   # same as the native install above
+docker compose up
+```
+
+`docker-compose.yml` defaults to `network_mode: host` — the only mode under which LAN Device Monitoring (`lan/lanScanner.js`'s ping+ARP sweep) sees your *real* LAN, the same way it does when this app runs natively. That means:
+
+| Mode | System monitoring & alerting | LAN Device Monitoring | Portability |
+|---|---|---|---|
+| **`network_mode: host`** (default) | ✅ Full | ✅ Full — same as running natively | **Linux only.** Docker Desktop for Mac/Windows runs containers inside a VM, so even "host" mode there means the VM's network, not your machine's real LAN — this app's own platform support was already "macOS or Linux" natively (never Windows), so this isn't a new restriction so much as the same one carried into Docker |
+| Default bridge (`ports:` mapping, in the compose file's comments) | ✅ Full | ❌ Reports zero devices — a Docker bridge network is isolated from your real LAN at the network layer, no amount of configuration inside the container fixes this | ✅ macOS / Windows / Linux, Docker Desktop included |
+
+If you're on Docker Desktop and only need system monitoring + alerting, comment out `network_mode: host` in `docker-compose.yml` and uncomment the `ports:` block instead — everything except LAN Device Monitoring works unchanged. On a host with more than one active network interface, `LAN_SCAN_CIDR` (see the environment variable table above) is the escape hatch if auto-detection picks the wrong one inside the container, same as it is natively.
+
+`data/` is bind-mounted (`./data:/app/data`) so alert rules and the LAN device ledger survive a `docker compose down && docker compose up`. See [`PHASE6_DOCKER_PLAN.md`](PHASE6_DOCKER_PLAN.md) for the full design rationale.
 
 ---
 

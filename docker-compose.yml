@@ -1,0 +1,32 @@
+# See PHASE6_DOCKER_PLAN.md for the full rationale, especially the
+# "Central design decision: networking mode" section.
+#
+# network_mode: host is the supported default -- it's the only mode under
+# which lan/lanScanner.js's ping+arp sweep sees your *real* LAN, the same
+# way it does when this app runs natively. That means:
+#   - Linux only. Docker Desktop for Mac/Windows runs containers inside a
+#     VM, so even "host" mode there means the VM's network, not your
+#     Mac/Windows machine's real LAN -- this app's own platform support
+#     was already "macOS or Linux" natively, never Windows, so this isn't
+#     a new restriction so much as the same one carried into Docker.
+#   - No `ports:` mapping is needed or used below: under host networking
+#     the container binds PORT directly on the host, exactly like
+#     `npm start` does today.
+#
+# Want full portability instead (macOS/Windows Docker Desktop included)
+# at the cost of LAN Device Monitoring reporting zero devices? Comment out
+# `network_mode: host` below and uncomment the `ports:` block instead.
+# Everything else (system monitoring, alerting/notifications) is
+# unaffected either way.
+services:
+  snd-home:
+    build: .
+    container_name: snd-home
+    network_mode: host
+    # ports:
+    #   - "3000:3000"
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data

@@ -1,0 +1,12 @@
+# See PHASE6_DOCKER_PLAN.md Stage 2. Keeps the build context small and,
+# more importantly, keeps host-local runtime state (real alert rules, the
+# real LAN device ledger, real secrets) out of the image -- data/ is meant
+# to arrive via docker-compose.yml's bind mount at run time, not be baked
+# in at build time.
+node_modules/
+data/*.json
+data/*.log
+.env
+.git/
+.claude/
+*.bak
