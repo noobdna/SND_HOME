@@ -113,6 +113,29 @@ describe("POST /api/notifiers/:name/test", () => {
   });
 });
 
+// GET / の catch ブロックの「想定外エラー(型付き例外ではない)→ 500」分岐。
+// routes/notifiers.js は notifiers/*.js をモジュール全体で require し、その
+// 参照をそのまま配列に保持しているため(分割代入ではない)、テスト側からも
+// 同じモジュールを require して configured() を一時的にモンキーパッチし、
+// 強制的にエラーを発生させられる(routes/alerts.js・routes/lan.js の同種の
+// テストと同じ手法)。finally で必ず元に戻す。
+describe("error handling (unexpected errors -> 500)", () => {
+  it("GET / 500s if a notifier's configured() throws", async () => {
+    const discordNotifier = require("../notifiers/discordNotifier");
+    const original = discordNotifier.configured;
+    discordNotifier.configured = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).get("/api/notifiers");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      discordNotifier.configured = original;
+    }
+  });
+});
+
 // routes/alerts.test.js の "auth (opt-in, POST/PUT/DELETE only)" と同じ検証を
 // このルーターに対しても行う — middleware/auth.js 自体の単体テストは
 // middleware/auth.test.js が担う。
