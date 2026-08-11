@@ -11,7 +11,7 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 
-const { STATES, createInitialState, evaluate } = require("./ruleEvaluator");
+const { STATES, createInitialState, evaluate, resolveMetric, compare } = require("./ruleEvaluator");
 
 const rule = {
   id: "disk-root-critical",
@@ -123,6 +123,74 @@ describe("evaluate() — happy-path full cycle (OK → FIRING → DOWN → RECOV
     assert.equal(nextState.state, STATES.OK);
     assert.equal(nextState.breachSince, t);
     state = nextState;
+  });
+});
+
+describe("resolveMetric()", () => {
+  it("resolves a nested dot path", () => {
+    assert.equal(resolveMetric({ disk: { percent: 87 } }, "disk.percent"), 87);
+  });
+
+  it("resolves a single-segment path", () => {
+    assert.equal(resolveMetric({ uptime: 42 }, "uptime"), 42);
+  });
+
+  it("returns undefined for a non-string metricPath", () => {
+    assert.equal(resolveMetric({ disk: { percent: 87 } }, undefined), undefined);
+    assert.equal(resolveMetric({ disk: { percent: 87 } }, 123), undefined);
+    assert.equal(resolveMetric({ disk: { percent: 87 } }, null), undefined);
+  });
+
+  it("returns undefined for an empty-string metricPath", () => {
+    assert.equal(resolveMetric({ disk: { percent: 87 } }, ""), undefined);
+  });
+
+  it("returns undefined when a missing property breaks the path", () => {
+    assert.equal(resolveMetric({ disk: {} }, "disk.percent"), undefined);
+  });
+
+  it("returns undefined when an intermediate value is null", () => {
+    assert.equal(resolveMetric({ disk: null }, "disk.percent"), undefined);
+  });
+
+  it("returns undefined when the top-level snapshot itself is null", () => {
+    assert.equal(resolveMetric(null, "disk.percent"), undefined);
+  });
+});
+
+describe("compare()", () => {
+  it("> : strictly greater", () => {
+    assert.equal(compare(95, ">", 90), true);
+    assert.equal(compare(90, ">", 90), false);
+  });
+
+  it(">= : greater than or equal", () => {
+    assert.equal(compare(90, ">=", 90), true);
+    assert.equal(compare(89, ">=", 90), false);
+  });
+
+  it("< : strictly less", () => {
+    assert.equal(compare(85, "<", 90), true);
+    assert.equal(compare(90, "<", 90), false);
+  });
+
+  it("<= : less than or equal", () => {
+    assert.equal(compare(90, "<=", 90), true);
+    assert.equal(compare(91, "<=", 90), false);
+  });
+
+  it("== : strict equality (no type coercion)", () => {
+    assert.equal(compare(90, "==", 90), true);
+    assert.equal(compare("90", "==", 90), false); // no "90" == 90 coercion
+  });
+
+  it("!= : strict inequality (no type coercion)", () => {
+    assert.equal(compare(91, "!=", 90), true);
+    assert.equal(compare(90, "!=", 90), false);
+  });
+
+  it("throws on an unknown operator", () => {
+    assert.throws(() => compare(90, "~=", 90), /Unknown operator: ~=/);
   });
 });
 
@@ -275,6 +343,20 @@ describe("evaluate() — edge cases (Task 2.9)", () => {
     });
   });
 
+  describe("DOWN cooldown", () => {
+    it("DOWN, still breached, cooldown elapsed: re-notifies with a 'still DOWN' alert, same incident thread, state stays DOWN", () => {
+      const now = FIRED_AT + rule.cooldown * 1000; // exactly at the cooldown boundary
+      const { nextState, notify, alert } = evaluate(rule, 95, downState(), now);
+      assert.equal(nextState.state, STATES.DOWN);
+      assert.equal(notify, true);
+      assert.equal(nextState.lastNotifiedAt, now);
+      assert.equal(alert.state, STATES.DOWN);
+      assert.equal(alert.previousState, STATES.DOWN);
+      assert.equal(alert.alertId, ALERT_ID); // same incident, no new id minted
+      assert.match(alert.message, /is still DOWN/);
+    });
+  });
+
   describe("duration = 0", () => {
     it("OK → FIRING fires on the very first breaching tick when duration is 0", () => {
       const zeroDurationRule = { ...rule, duration: 0 };
@@ -298,6 +380,13 @@ describe("evaluate() — edge cases (Task 2.9)", () => {
       const a = evaluate(enabledRule, 95, downState(), FIRED_AT + 5000);
       const b = evaluate(disabledRule, 95, downState(), FIRED_AT + 5000);
       assert.deepEqual(a, b);
+    });
+  });
+
+  describe("evaluate(): unknown state.state", () => {
+    it("throws — defense-in-depth against a corrupted runtime state (should never happen via AlertEngine/RuleStore)", () => {
+      const corruptState = { ...createInitialState(), state: "BOGUS" };
+      assert.throws(() => evaluate(rule, 95, corruptState, T0), /Unknown state: BOGUS/);
     });
   });
 });
