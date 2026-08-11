@@ -148,6 +148,21 @@ describe("detectLocalSubnet", () => {
     const fakeInterfaces = { tun0: null, en0: [{ address: "10.0.0.5", netmask: "255.255.255.0", family: "IPv4", internal: false }] };
     assert.equal(detectLocalSubnet(fakeInterfaces).localIp, "10.0.0.5");
   });
+
+  it("skips an entry whose address/netmask isn't a parseable IPv4 (defensive against malformed OS data), falling through to the next valid one", () => {
+    const fakeInterfaces = {
+      en0: [
+        { address: "not-an-ip", netmask: "255.255.255.0", family: "IPv4", internal: false },
+        { address: "10.0.0.5", netmask: "255.255.255.0", family: "IPv4", internal: false },
+      ],
+    };
+    assert.deepEqual(detectLocalSubnet(fakeInterfaces), {
+      interfaceName: "en0",
+      localIp: "10.0.0.5",
+      netmask: "255.255.255.0",
+      cidr: "10.0.0.0/24",
+    });
+  });
 });
 
 describe("parseArpTable", () => {
