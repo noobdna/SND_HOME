@@ -51,6 +51,7 @@ It's built as a **plugin-based architecture** from day one — new metrics are `
 | 📧 **Email Notifications** | SMTP delivery via `nodemailer`, configurable host/port/auth |
 | 🪝 **Generic Webhook Notifications** | Raw JSON POST to any endpoint, optionally HMAC-SHA256 signed (`X-SND-Signature`) for PagerDuty/Opsgenie/custom receivers |
 | 🔌 **Notifier Plugin Registry** | Same `register()`-based plugin pattern as collectors — one file per channel, isolated failures via `Promise.allSettled` |
+| 📶 **LAN Device Monitoring** | Passive network sweep (ping + ARP/`ip neigh`, no port scanning) on its own 2-minute timer, with vendor lookup via a static OUI table and a persisted device ledger (first/last seen, online status, optional nickname) |
 
 ### Upcoming (roadmap)
 
@@ -307,8 +308,12 @@ All endpoints are served from the running Express app; only endpoints that exist
 | `GET` | `/api/alerts/engine/status` | Alert engine's own status (running, rule count, active alert count, last evaluated) |
 | `GET` | `/api/notifiers` | List all known notifier channels and whether each is live-configured |
 | `POST` | `/api/notifiers/:name/test` | Send a `[TEST]` message through one specific notifier channel |
+| `GET` | `/api/lan/devices` | List every known device in the LAN ledger (online and offline) |
+| `GET` | `/api/lan/devices/:mac` | Get a single device by MAC address |
+| `PATCH` | `/api/lan/devices/:mac` | Set or clear (`nickname: null`) a device's display nickname |
+| `GET` | `/api/lan/status` | LAN scan engine status (running, scan interval, known/online device counts, last scan time) |
 
-> 🔒 **Authentication is opt-in.** The mutating alert/notifier endpoints (`POST`/`PUT`/`DELETE`) are unauthenticated by default — fine for a single-user homelab on a trusted network. Set `API_KEY` in `.env` to require `Authorization: Bearer <API_KEY>` on those endpoints (`middleware/auth.js`); leave it unset to keep the previous, no-auth behavior. Recommended before exposing this server beyond localhost/your own LAN. Read-only `GET` endpoints are never gated. See [`PHASE5_PLAN.md`](PHASE5_PLAN.md) for the history of this decision.
+> 🔒 **Authentication is opt-in.** The mutating alert/notifier endpoints (`POST`/`PUT`/`DELETE`) are unauthenticated by default — fine for a single-user homelab on a trusted network. Set `API_KEY` in `.env` to require `Authorization: Bearer <API_KEY>` on those endpoints (`middleware/auth.js`); leave it unset to keep the previous, no-auth behavior. Recommended before exposing this server beyond localhost/your own LAN. Read-only `GET` endpoints are never gated — **except `/api/lan/*`, which is gated as a whole (including its `GET` routes)** when `API_KEY` is set: a list of devices on your network is more sensitive than a CPU percentage, so every route under `/api/lan` is protected together rather than only its mutating ones. See [`PHASE5_PLAN.md`](PHASE5_PLAN.md) for the history of this decision.
 
 <details>
 <summary><code>GET /api/system</code> — example response</summary>
@@ -436,6 +441,47 @@ All endpoints are served from the running Express app; only endpoints that exist
 ```
 </details>
 
+<details>
+<summary><code>GET /api/lan/devices</code> — example response</summary>
+
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "mac": "aa:bb:cc:dd:ee:ff",
+      "ip": "192.168.1.1",
+      "vendor": "NETGEAR",
+      "nickname": "Living Room Router",
+      "online": true,
+      "respondedToPing": true,
+      "inArpTable": true,
+      "firstSeenAt": "2026-08-10T09:00:00.000Z",
+      "lastSeenAt": "2026-08-11T13:02:00.000Z"
+    }
+  ]
+}
+```
+</details>
+
+<details>
+<summary><code>GET /api/lan/status</code> — example response</summary>
+
+```json
+{
+  "running": true,
+  "interval": 120000,
+  "lastUpdated": "2026-08-11T13:02:00.000Z",
+  "lastError": null,
+  "uptime": 3612,
+  "knownDeviceCount": 14,
+  "onlineCount": 11
+}
+```
+</details>
+
+> 🧭 **Feeds into the Alert Engine, too.** `collectors/lanCollector.js` registers into the same `collectorRegistry` as CPU/memory/disk/network, exposing each known device on `/api/system` as `lan.devices.<mac_with_underscores_instead_of_colons>.online` (`0`/`1`). That means a per-device "went offline" alert rule (e.g. `{ "metric": "lan.devices.aa_bb_cc_dd_ee_ff.online", "operator": "<", "threshold": 1 }`) works today with zero changes to `alertEngine.js`/`ruleEvaluator.js` — it's the same dot-path `resolveMetric()` mechanism every other metric alert already uses.
+
 ---
 
 ## 📁 Project Structure
@@ -446,11 +492,17 @@ SND_HOME/
 │   ├── cpuCollector.js           # CPU usage % (sampled) + core count
 │   ├── memoryCollector.js        # Used / total / percent memory
 │   ├── diskCollector.js          # Used / total / percent disk (via df -k /)
-│   └── networkCollector.js       # Interfaces, local IP, rx/tx bytes (via netstat -ib)
+│   ├── networkCollector.js       # Interfaces, local IP, rx/tx bytes (via netstat -ib)
+│   └── lanCollector.js           # Reads lanEngine's cache, exposes lan.devices.<mac> for alert rules
 ├── monitor/
 │   ├── collectorRegistry.js      # Registers collectors, runs collectAll()
 │   ├── monitorEngine.js          # EventEmitter-based background polling loop (5s)
 │   └── historyStore.js           # In-memory ring buffer (720 points) for trend data
+├── lan/                          # LAN device discovery — independent 2-minute timer, not part of the 5s poll loop
+│   ├── lanScanner.js             # Subnet detection, ping sweep, arp/ip-neigh MAC lookup, OUI vendor resolution
+│   ├── lanEngine.js              # EventEmitter-based scan loop (mirrors monitorEngine.js's pattern)
+│   ├── deviceStore.js            # CRUD + JSON-file persistence for the known-device ledger
+│   └── ouiLookup.js              # Static MAC-prefix -> vendor name lookup (config/ouiPrefixes.json)
 ├── alerts/
 │   ├── ruleEvaluator.js          # Pure state-machine transition logic (no I/O)
 │   ├── ruleStore.js              # CRUD + JSON-file persistence for alert rules
@@ -462,15 +514,21 @@ SND_HOME/
 │   ├── slackNotifier.js
 │   ├── emailNotifier.js          # Uses nodemailer
 │   └── webhookNotifier.js        # Optional HMAC-SHA256 request signing
+├── middleware/
+│   └── auth.js                   # Opt-in Bearer-token auth (requireAuth), gated on API_KEY
 ├── routes/
 │   ├── system.js                 # /api/system, /api/health, /api/system/*
 │   ├── monitor.js                # /api/monitor/status
 │   ├── alerts.js                 # /api/alerts/* (rules CRUD, active, history, test, status)
-│   └── notifiers.js              # /api/notifiers/*
+│   ├── notifiers.js              # /api/notifiers/*
+│   └── lan.js                    # /api/lan/* (device ledger, nicknames, scan status) — entire router requires auth when set
 ├── config/
-│   └── defaultAlertRules.json    # Seed rules loaded on first-ever run
-├── data/                         # Runtime-persisted alert rules (gitignored, created at runtime)
-│   └── .gitkeep
+│   ├── defaultAlertRules.json    # Seed rules loaded on first-ever run
+│   └── ouiPrefixes.json          # Static MAC-prefix -> vendor name table used by lan/ouiLookup.js
+├── data/                         # Runtime-persisted state (gitignored, created at runtime)
+│   ├── .gitkeep
+│   ├── alertRules.json           # Alert rule definitions
+│   └── lanDevices.json           # Known LAN device ledger
 ├── public/                       # Static dashboard, served by express.static
 │   ├── index.html                # Dashboard markup
 │   ├── app.js                    # Fetch loop, rendering, Canvas line charts
