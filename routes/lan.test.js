@@ -133,6 +133,70 @@ describe("PATCH /api/lan/devices/:mac", () => {
   });
 });
 
+// 各エンドポイントの catch ブロックの「想定外エラー(型付き例外ではない)→ 500」分岐。
+// 通常の入力ではこの経路(deviceStore/lanEngine からの型付きでないエラー)を
+// 再現できないため、対象のモジュール関数を一時的にモンキーパッチして強制発生
+// させる(routes/alerts.js の同種のテストと同じ手法 -- routes/lan.js も
+// deviceStore/lanEngine をモジュール全体で require しているからこそ可能)。
+// 各テストは finally で必ず元に戻す。
+describe("error handling (unexpected errors -> 500)", () => {
+  it("GET /devices 500s and echoes the error message", async () => {
+    const original = deviceStore.list;
+    deviceStore.list = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).get("/api/lan/devices");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      deviceStore.list = original;
+    }
+  });
+
+  it("GET /devices/:mac 500s on a non-DeviceNotFoundError error", async () => {
+    const original = deviceStore.get;
+    deviceStore.get = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).get("/api/lan/devices/aa:bb:cc:dd:ee:ff");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      deviceStore.get = original;
+    }
+  });
+
+  it("PATCH /devices/:mac 500s on a non-DeviceNotFoundError, non-validation error", async () => {
+    const original = deviceStore.setNickname;
+    deviceStore.setNickname = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).patch("/api/lan/devices/aa:bb:cc:dd:ee:ff").send({ nickname: "x" });
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      deviceStore.setNickname = original;
+    }
+  });
+
+  it("GET /status 500s and echoes the error message", async () => {
+    const original = lanEngine.getStatus;
+    lanEngine.getStatus = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).get("/api/lan/status");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      lanEngine.getStatus = original;
+    }
+  });
+});
+
 describe("GET /api/lan/status", () => {
   it("returns lanEngine.getStatus() unwrapped (no envelope, matching /api/monitor/status)", async () => {
     lanEngine.getStatus = () => ({ running: false, interval: 120_000, lastUpdated: null, lastError: null, uptime: 0, knownDeviceCount: 0, onlineCount: 0 });
