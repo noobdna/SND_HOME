@@ -26,6 +26,7 @@ const {
   remove,
   clear,
   load,
+  loadOrSeed,
   persist,
   getRulesPath,
   RuleValidationError,
@@ -386,5 +387,58 @@ describe("persistence", () => {
     const restored = get("disk-root-critical");
     assert.equal(restored.severity, "critical");
     assert.deepEqual(restored.channels, ["discord"]);
+  });
+
+  // fs はモジュール全体を require しているため(分割代入ではない)、
+  // fs.readFileSync を一時的にモンキーパッチして existsSync 通過後の読み取り
+  // 失敗(パーミッション等)を再現できる。他の load() エラーケース(存在しない・
+  // 壊れたJSON・配列でない)とは異なり、実ファイルシステム操作だけでは
+  // 安定して再現できないため、これが妥当な手段。
+  it("load() resets to empty and warns without throwing when the file exists but can't be read", () => {
+    const file = tmpFile();
+    fs.writeFileSync(file, JSON.stringify([sample]), "utf8");
+    create(sample); // pollute the in-memory store first, to prove load() still clears it
+
+    const originalReadFileSync = fs.readFileSync;
+    fs.readFileSync = (targetPath, ...rest) => {
+      if (targetPath === file) {
+        throw new Error("EACCES: permission denied");
+      }
+      return originalReadFileSync(targetPath, ...rest);
+    };
+    try {
+      const result = load(file);
+      assert.deepEqual(result, { loaded: 0, skipped: 0 });
+      assert.deepEqual(list(), []);
+    } finally {
+      fs.readFileSync = originalReadFileSync;
+    }
+  });
+});
+
+describe("loadOrSeed()", () => {
+  it("when the rules file already exists: loads from it (ignoring the seed), reports seeded: false", () => {
+    const file = tmpFile();
+    const seedFile = tmpFile();
+    fs.writeFileSync(file, JSON.stringify([sample]), "utf8");
+    fs.writeFileSync(seedFile, JSON.stringify([{ ...sample, id: "seed-only-rule" }]), "utf8");
+
+    const result = loadOrSeed(file, seedFile);
+    assert.deepEqual(result, { loaded: 1, skipped: 0, seeded: false });
+    assert.deepEqual(list().map((r) => r.id), ["disk-root-critical"]);
+  });
+
+  it("when the rules file doesn't exist: seeds from seedFilePath, persists it to filePath, reports seeded: true", () => {
+    const file = tmpFile(); // deliberately never created
+    const seedFile = tmpFile();
+    fs.writeFileSync(seedFile, JSON.stringify([sample]), "utf8");
+
+    const result = loadOrSeed(file, seedFile);
+    assert.deepEqual(result, { loaded: 1, skipped: 0, seeded: true });
+    assert.deepEqual(list().map((r) => r.id), ["disk-root-critical"]);
+
+    const onDisk = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.equal(onDisk.length, 1);
+    assert.equal(onDisk[0].id, "disk-root-critical");
   });
 });
