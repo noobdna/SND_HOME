@@ -18,11 +18,11 @@
 //
 // Task 6.8 で server.js に /api/notifiers としてマウント済み。
 //
-// ⚠️ SECURITY TODO — routes/alerts.js と同じ注記: POST /:name/test は外部サービスへ
-// 実際にメッセージを送信する変更系エンドポイントだが、認証ミドルウェアはまだ
-// このリポジトリに存在しない。routes/alerts.js のコミット時にユーザーと合意した
-// 「今回は認証なしで実装し、明記して可視化する」方針をそのまま踏襲する。
+// SECURITY: routes/alerts.js と同じ middleware/auth.js の requireAuth を
+// POST /:name/test に適用する(オプトイン — API_KEY 未設定なら従来通り無認証。
+// 経緯は middleware/auth.js 冒頭のコメント参照)。GET / は対象外。
 const express = require("express");
+const { requireAuth } = require("../middleware/auth");
 const { STATES } = require("../alerts/ruleEvaluator");
 
 const notifiers = [
@@ -59,7 +59,7 @@ router.get("/", (req, res) => {
 // POST /api/alerts/rules/:id/test(Task 6.5)とは異なり、こちらは1チャンネル単体の
 // 疎通確認が目的のため、そのチャンネル自身の成功/失敗をそのままレスポンスに
 // 反映できる(Promise.allSettled の背後に隠さない)。
-router.post("/:name/test", async (req, res) => {
+router.post("/:name/test", requireAuth, async (req, res) => {
   const notifier = notifiers.find((n) => n.name === req.params.name);
   if (!notifier) {
     res.status(404).json({ status: "error", message: `Unknown notifier: ${req.params.name}` });

@@ -236,6 +236,7 @@ No `.env` file is required to run the app; every variable has a sensible default
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | Port the Express server listens on |
+| `API_KEY` | *(none)* | Opt-in: set to require `Authorization: Bearer <API_KEY>` on the mutating `/api/alerts` and `/api/notifiers` endpoints (`middleware/auth.js`). Unset means those endpoints stay unauthenticated, as before |
 | `ALERTS_ENABLED` | `true` | Documented master switch for the alert engine — **not yet wired to any runtime check** (known gap, see [`PHASE5_PLAN.md`](PHASE5_PLAN.md)); the alert engine currently always runs once started |
 | `ALERTS_RULES_PATH` | `./data/alertRules.json` | Where alert rule definitions are persisted (write-through JSON). On first-ever run (no file yet), seeds from `config/defaultAlertRules.json` instead |
 | `DISCORD_ENABLED` | `true` | Both this and `DISCORD_WEBHOOK_URL` are required for Discord notifications to register |
@@ -307,7 +308,7 @@ All endpoints are served from the running Express app; only endpoints that exist
 | `GET` | `/api/notifiers` | List all known notifier channels and whether each is live-configured |
 | `POST` | `/api/notifiers/:name/test` | Send a `[TEST]` message through one specific notifier channel |
 
-> ⚠️ **No authentication yet.** The mutating alert/notifier endpoints (`POST`/`PUT`/`DELETE`) have no auth middleware — this repo doesn't have one built yet. Fine for a single-user homelab on a trusted network; do not expose these endpoints to the open internet as-is. See [`PHASE5_PLAN.md`](PHASE5_PLAN.md) for the tracked follow-up.
+> 🔒 **Authentication is opt-in.** The mutating alert/notifier endpoints (`POST`/`PUT`/`DELETE`) are unauthenticated by default — fine for a single-user homelab on a trusted network. Set `API_KEY` in `.env` to require `Authorization: Bearer <API_KEY>` on those endpoints (`middleware/auth.js`); leave it unset to keep the previous, no-auth behavior. Recommended before exposing this server beyond localhost/your own LAN. Read-only `GET` endpoints are never gated. See [`PHASE5_PLAN.md`](PHASE5_PLAN.md) for the history of this decision.
 
 <details>
 <summary><code>GET /api/system</code> — example response</summary>

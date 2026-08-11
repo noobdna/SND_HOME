@@ -366,3 +366,40 @@ describe("POST /api/alerts/rules/:id/silence (Stage 9 stretch)", () => {
     assert.equal(received.length, 1);
   });
 });
+
+// middleware/auth.js の requireAuth が実際にこのルーターへ配線されていることの
+// 検証(ミドルウェア自体の単体テストは middleware/auth.test.js が担う)。
+// API_KEY はこのファイルの他のテストに一切影響しないよう、このブロック内でのみ
+// 設定・削除する(process.env.ALERTS_RULES_PATH の既存の扱いと同じ規約)。
+describe("auth (opt-in, POST/PUT/DELETE only)", () => {
+  afterEach(() => {
+    delete process.env.API_KEY;
+  });
+
+  it("without API_KEY configured, mutating routes remain unauthenticated (unchanged default)", async () => {
+    delete process.env.API_KEY;
+    const res = await request(app).post("/api/alerts/rules").send(sampleRule("auth-default"));
+    assert.equal(res.status, 201);
+  });
+
+  it("with API_KEY configured, POST /rules 401s without a matching Bearer token", async () => {
+    process.env.API_KEY = "secret-token";
+    const res = await request(app).post("/api/alerts/rules").send(sampleRule("auth-missing"));
+    assert.equal(res.status, 401);
+  });
+
+  it("with API_KEY configured, POST /rules succeeds with the correct Bearer token", async () => {
+    process.env.API_KEY = "secret-token";
+    const res = await request(app)
+      .post("/api/alerts/rules")
+      .set("Authorization", "Bearer secret-token")
+      .send(sampleRule("auth-correct"));
+    assert.equal(res.status, 201);
+  });
+
+  it("GET /rules is never gated, even with API_KEY configured", async () => {
+    process.env.API_KEY = "secret-token";
+    const res = await request(app).get("/api/alerts/rules");
+    assert.equal(res.status, 200);
+  });
+});

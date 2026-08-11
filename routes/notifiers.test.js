@@ -112,3 +112,30 @@ describe("POST /api/notifiers/:name/test", () => {
     assert.match(res.body.message, /responded with 500/);
   });
 });
+
+// routes/alerts.test.js の "auth (opt-in, POST/PUT/DELETE only)" と同じ検証を
+// このルーターに対しても行う — middleware/auth.js 自体の単体テストは
+// middleware/auth.test.js が担う。
+describe("auth (opt-in)", () => {
+  afterEach(() => {
+    delete process.env.API_KEY;
+  });
+
+  it("without API_KEY configured, POST /:name/test remains unauthenticated (unchanged default)", async () => {
+    delete process.env.API_KEY;
+    const res = await request(app).post("/api/notifiers/bogus/test");
+    assert.equal(res.status, 404); // reaches the handler (not 401) -- unknown name, not an auth failure
+  });
+
+  it("with API_KEY configured, POST /:name/test 401s without a matching Bearer token", async () => {
+    process.env.API_KEY = "secret-token";
+    const res = await request(app).post("/api/notifiers/discord/test");
+    assert.equal(res.status, 401);
+  });
+
+  it("with API_KEY configured, GET / is never gated", async () => {
+    process.env.API_KEY = "secret-token";
+    const res = await request(app).get("/api/notifiers");
+    assert.equal(res.status, 200);
+  });
+});

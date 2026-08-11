@@ -27,15 +27,13 @@
 // GET /status は envelope で包まず生のオブジェクトをそのまま返す設計のため、
 // それに合わせる(本ファイル内で唯一 envelope を使わないエンドポイント)。
 //
-// ⚠️ SECURITY TODO — 認証が未実装: PHASE5_PLAN.md の「API」節は「これらは本プロジェクト
-// 最初の変更系(POST/PUT/DELETE)エンドポイントであり、読み取り専用の /api/system/* が
-// まだ未認証でも、ここでの認証は必須(not optional)」と明記している。しかし
-// Milestone 2 の認証ミドルウェアはこのリポジトリにまだ存在しない(grep 済み、
-// middleware/ ディレクトリも無い)。ユーザーとの合意の上、今回は認証を追加せず
-// 実装し、この事実をコード・PHASE5_PLAN.md 双方に明記して可視化する方針とした
-// (ホームラボ規模・単一ユーザー運用を前提とした一時的な判断 — 本番公開前に
-// 必ず認証ミドルウェアを追加すること)。
+// SECURITY: 変更系(POST/PUT/DELETE)エンドポイントは middleware/auth.js の
+// requireAuth をそれぞれ個別に通す(オプトイン — API_KEY 未設定なら従来通り
+// 無認証、設定時のみ Bearer トークンを要求。経緯は middleware/auth.js 冒頭の
+// コメント参照)。GET エンドポイントは対象外(routes/system.js 同様、引き続き
+// 無認証のまま)。
 const express = require("express");
+const { requireAuth } = require("../middleware/auth");
 const ruleStore = require("../alerts/ruleStore");
 const alertEngine = require("../alerts/alertEngine");
 const alertHistoryStore = require("../alerts/alertHistoryStore");
@@ -130,7 +128,7 @@ router.get("/history", (req, res) => {
 // PHASE5_PLAN.md「API」節: "Create a new rule (body validated against the schema above)"。
 // バリデーションは ruleStore.create() → validateRule() が担う。RuleValidationError の
 // .errors 配列をそのままレスポンスに含め、どのフィールドが不正かAPI利用者が判別できるようにする。
-router.post("/rules", (req, res) => {
+router.post("/rules", requireAuth, (req, res) => {
   try {
     const rule = ruleStore.create(req.body);
     res.status(201).json({ status: "ok", data: withRuntime(rule) });
@@ -152,7 +150,7 @@ router.post("/rules", (req, res) => {
 
 // PHASE5_PLAN.md「API」節: "Update an existing rule"。ruleStore.update() は部分更新
 // (既存フィールドとのマージ)であり、id の変更は無視される(ruleStore.js 側の既存仕様)。
-router.put("/rules/:id", (req, res) => {
+router.put("/rules/:id", requireAuth, (req, res) => {
   try {
     const rule = ruleStore.update(req.params.id, req.body);
     res.json({ status: "ok", data: withRuntime(rule) });
@@ -191,7 +189,7 @@ router.put("/rules/:id", (req, res) => {
 // サイレンス状態によって黙って抑制されると「なぜテストメッセージが届かないのか」
 // と混乱を招くため、意図的に別経路(notifierRegistry.dispatch() を直接呼ぶ)
 // のままにしてある。
-router.post("/rules/:id/silence", (req, res) => {
+router.post("/rules/:id/silence", requireAuth, (req, res) => {
   try {
     const { durationSeconds, until } = req.body || {};
 
@@ -229,7 +227,7 @@ router.post("/rules/:id/silence", (req, res) => {
 // PHASE5_PLAN.md「API」節: "Delete a rule (its runtime state is discarded too)"。
 // ruleStore.remove() が失敗(未存在)した場合は alertEngine.clearRuntime() を呼ばない
 // (削除が実際に成功した場合にのみランタイム状態を破棄する)。
-router.delete("/rules/:id", (req, res) => {
+router.delete("/rules/:id", requireAuth, (req, res) => {
   try {
     ruleStore.remove(req.params.id);
     alertEngine.clearRuntime(req.params.id);
@@ -263,7 +261,7 @@ router.delete("/rules/:id", (req, res) => {
 // あえて同じ挙動にしている — テストエンドポイントだけを実際より "正しく"
 // 見せかけると、テスト結果が実際の通知挙動を予測しなくなってしまうため。
 // channels フィルタリングの実装は別タスクとして今後フラグする。
-router.post("/rules/:id/test", async (req, res) => {
+router.post("/rules/:id/test", requireAuth, async (req, res) => {
   try {
     const rule = ruleStore.get(req.params.id);
     const now = new Date().toISOString();
