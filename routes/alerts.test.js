@@ -367,6 +367,174 @@ describe("POST /api/alerts/rules/:id/silence (Stage 9 stretch)", () => {
   });
 });
 
+// 各エンドポイントの catch ブロックの「想定外エラー(型付き例外ではない)→ 500」分岐。
+// 実際に ruleStore/alertEngine/alertHistoryStore からこの種のエラーが飛ぶ経路は
+// 通常の入力では再現できない(ファイルI/Oエラー等の環境要因が必要)ため、対象の
+// モジュール関数を一時的にモンキーパッチして強制発生させる — routes/alerts.js が
+// 分割代入ではなくモジュール全体を require しているからこそ可能な手法(他の
+// 「whole-module require」箇所と同じ理由)。各テストは finally で必ず元に戻す。
+describe("error handling (unexpected errors -> 500)", () => {
+  it("GET /rules 500s and echoes the error message", async () => {
+    const original = ruleStore.list;
+    ruleStore.list = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).get("/api/alerts/rules");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      ruleStore.list = original;
+    }
+  });
+
+  it("GET /rules/:id 500s on a non-RuleNotFoundError error", async () => {
+    const original = ruleStore.get;
+    ruleStore.get = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).get("/api/alerts/rules/whatever");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      ruleStore.get = original;
+    }
+  });
+
+  it("GET /active 500s and echoes the error message", async () => {
+    const original = ruleStore.list;
+    ruleStore.list = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).get("/api/alerts/active");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      ruleStore.list = original;
+    }
+  });
+
+  it("GET /history 500s and echoes the error message", async () => {
+    const original = alertHistoryStore.getHistory;
+    alertHistoryStore.getHistory = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).get("/api/alerts/history");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      alertHistoryStore.getHistory = original;
+    }
+  });
+
+  it("POST /rules 500s on a non-validation/non-conflict error", async () => {
+    const original = ruleStore.create;
+    ruleStore.create = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).post("/api/alerts/rules").send(sampleRule("whatever"));
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      ruleStore.create = original;
+    }
+  });
+
+  it("PUT /rules/:id 500s on a non-validation/non-not-found error", async () => {
+    const original = ruleStore.update;
+    ruleStore.update = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).put("/api/alerts/rules/whatever").send({ threshold: 1 });
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      ruleStore.update = original;
+    }
+  });
+
+  it("DELETE /rules/:id 500s on a non-RuleNotFoundError error", async () => {
+    const original = ruleStore.remove;
+    ruleStore.remove = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).delete("/api/alerts/rules/whatever");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      ruleStore.remove = original;
+    }
+  });
+
+  it("POST /rules/:id/test 500s on a non-RuleNotFoundError error", async () => {
+    const original = ruleStore.get;
+    ruleStore.get = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).post("/api/alerts/rules/whatever/test");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      ruleStore.get = original;
+    }
+  });
+
+  it("GET /engine/status 500s and echoes the error message", async () => {
+    const original = alertEngine.getStatus;
+    alertEngine.getStatus = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).get("/api/alerts/engine/status");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      alertEngine.getStatus = original;
+    }
+  });
+
+  it("POST /rules/:id/silence surfaces a RuleValidationError from ruleStore.update() as 400", async () => {
+    ruleStore.create(sampleRule("silence-validation-target"));
+    const original = ruleStore.update;
+    ruleStore.update = () => {
+      throw new ruleStore.RuleValidationError(["field x is invalid"]);
+    };
+    try {
+      const res = await request(app)
+        .post("/api/alerts/rules/silence-validation-target/silence")
+        .send({ durationSeconds: 60 });
+      assert.equal(res.status, 400);
+      assert.deepEqual(res.body.errors, ["field x is invalid"]);
+    } finally {
+      ruleStore.update = original;
+    }
+  });
+
+  it("POST /rules/:id/silence 500s on a non-validation/non-not-found error", async () => {
+    ruleStore.create(sampleRule("silence-500-target"));
+    const original = ruleStore.update;
+    ruleStore.update = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app)
+        .post("/api/alerts/rules/silence-500-target/silence")
+        .send({ durationSeconds: 60 });
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      ruleStore.update = original;
+    }
+  });
+});
+
 // middleware/auth.js の requireAuth が実際にこのルーターへ配線されていることの
 // 検証(ミドルウェア自体の単体テストは middleware/auth.test.js が担う)。
 // API_KEY はこのファイルの他のテストに一切影響しないよう、このブロック内でのみ
