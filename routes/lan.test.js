@@ -78,6 +78,13 @@ describe("GET /api/lan/devices/:mac", () => {
     assert.equal(res.status, 404);
     assert.equal(res.body.status, "error");
   });
+
+  it("finds the device when the mac is requested in a different case (regression: case-sensitive lookup)", async () => {
+    seedDevice("aa:bb:cc:dd:ee:ff");
+    const res = await request(app).get("/api/lan/devices/AA:BB:CC:DD:EE:FF");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.mac, "aa:bb:cc:dd:ee:ff");
+  });
 });
 
 describe("PATCH /api/lan/devices/:mac", () => {
@@ -115,6 +122,14 @@ describe("PATCH /api/lan/devices/:mac", () => {
   it("404s for an unknown mac", async () => {
     const res = await request(app).patch("/api/lan/devices/00:00:00:00:00:00").send({ nickname: "x" });
     assert.equal(res.status, 404);
+  });
+
+  it("sets a nickname when the mac is given in a different case (regression: case-sensitive lookup)", async () => {
+    seedDevice("aa:bb:cc:dd:ee:ff");
+    const res = await request(app).patch("/api/lan/devices/AA:BB:CC:DD:EE:FF").send({ nickname: "Living Room TV" });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.mac, "aa:bb:cc:dd:ee:ff");
+    assert.equal(res.body.data.nickname, "Living Room TV");
   });
 });
 

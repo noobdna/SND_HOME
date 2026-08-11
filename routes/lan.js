@@ -26,6 +26,7 @@ const express = require("express");
 const { requireAuth } = require("../middleware/auth");
 const deviceStore = require("../lan/deviceStore");
 const lanEngine = require("../lan/lanEngine");
+const { normalizeMac } = require("../lan/lanScanner");
 
 const router = express.Router();
 
@@ -41,7 +42,11 @@ router.get("/devices", (req, res) => {
 
 router.get("/devices/:mac", (req, res) => {
   try {
-    const device = deviceStore.get(req.params.mac);
+    // 台帳は lan/lanScanner.js の normalizeMac() を通した形(小文字・2桁パディング)
+    // でキーされているため、URLパラメータも同じ正規化を通してから照合する —
+    // でないと "AA:BB:CC:DD:EE:FF" のような大文字表記(ルーター管理画面等で
+    // よく見る書式)で実在デバイスが404になってしまう。
+    const device = deviceStore.get(normalizeMac(req.params.mac));
     res.json({ status: "ok", data: device });
   } catch (error) {
     if (error instanceof deviceStore.DeviceNotFoundError) {
@@ -59,7 +64,8 @@ router.patch("/devices/:mac", (req, res) => {
       res.status(400).json({ status: "error", message: "Request body must include a 'nickname' field (string or null)" });
       return;
     }
-    const device = deviceStore.setNickname(req.params.mac, nickname);
+    // GET /devices/:mac と同じ理由(コメント参照)で正規化してから台帳を引く。
+    const device = deviceStore.setNickname(normalizeMac(req.params.mac), nickname);
     res.json({ status: "ok", data: device });
   } catch (error) {
     if (error instanceof deviceStore.DeviceNotFoundError) {

@@ -181,6 +181,16 @@ function detectLocalSubnet(interfaces = os.networkInterfaces()) {
 
 const MAC_PATTERN = "[0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5}";
 
+/**
+ * MACアドレスを台帳のキー形式(小文字・各オクテット2桁)に正規化する。
+ * lan/deviceStore.js のMapはこの形式でキーされる(recordScan() がここを通した
+ * 値のみを渡すため)。ルート層(routes/lan.js)がURLパラメータの :mac を台帳へ
+ * 渡す前に必ずこれを通すのは、"AA:BB:CC:DD:EE:FF" のような大文字表記(ルーターの
+ * DHCPクライアント一覧等でよく見る書式)が本来存在するデバイスに対して
+ * 404を返してしまう不具合を防ぐため。
+ * @param {string} mac
+ * @returns {string}
+ */
 function normalizeMac(mac) {
   return mac
     .split(":")
@@ -406,6 +416,7 @@ module.exports = {
   detectLocalSubnet,
   parseArpTable,
   parseIpNeighTable,
+  normalizeMac,
   pingHost,
   readArpTable,
   mapWithConcurrency,
