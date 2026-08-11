@@ -34,6 +34,16 @@ class LanEngine extends EventEmitter {
     // Collector群(すべてミリ秒未満〜数百ms程度で完了)には存在しない
     // 懸念だが、数秒〜十数秒かかりうるLANスキャンでは必要な保護。
     this.scanning = false;
+    // deviceStore.recordScan() の最新の戻り値。特に skippedNoMac (mac未解決で
+    // 台帳に載らなかった件数) を getStatus() から見えるようにするための保持。
+    // 「オンライン検出数(latestScan.onlineCount)」と「台帳の既知デバイス数
+    // (knownDeviceCount)」が食い違って見える最大の原因がこれ -- ping には
+    // 応答したが arp -a/ip neigh show の時点でMACが解決できなかった機器は、
+    // lanScanner.scan() の onlineCount には数えられるが、deviceStore.js の
+    // 意図的な設計(このファイル冒頭コメント参照: 安定識別子の無いものは
+    // 台帳に残さない)によりknownDeviceCountには数えられない。どちらの数値も
+    // それぞれ正しいが、この差分自体が今まで観測不能だった。
+    this.lastRecordStats = null;
   }
 
   /**
@@ -56,12 +66,22 @@ class LanEngine extends EventEmitter {
     if (this.scanning) return;
     this.scanning = true;
     try {
-      const result = await lanScanner.scan();
-      deviceStore.recordScan(result);
+      // LAN_SCAN_CIDR: 任意の運用者向けオーバーライド。lanScanner.detectLocalSubnet()
+      // は os.networkInterfaces() の最初の非内部IPv4インターフェースを機械的に
+      // 選ぶだけなので、複数のネットワークインターフェース(VPN・Docker仮想
+      // ブリッジ・複数NIC等)が有効なホストでは本来の家庭内LANとは異なる
+      // サブネットを誤って選びうる -- その場合、実在する機器の一部がそもそも
+      // スキャン対象IP範囲に入らず検出されない。未設定時は既存どおり自動検出。
+      const cidr = process.env.LAN_SCAN_CIDR || undefined;
+      const result = await lanScanner.scan(cidr ? { cidr } : {});
+      this.lastRecordStats = deviceStore.recordScan(result);
       this.latestScan = result;
       this.lastUpdated = new Date().toISOString();
       this.lastError = null;
-      console.log(`[lanEngine] scan complete: ${result.onlineCount}/${result.totalScanned} online`);
+      console.log(
+        `[lanEngine] scan complete: ${result.onlineCount}/${result.totalScanned} online` +
+          ` (${this.lastRecordStats.skippedNoMac} skipped: no MAC resolved)`,
+      );
       this.emit("update", result);
     } catch (error) {
       this.lastError = error.message || String(error);
@@ -112,6 +132,12 @@ class LanEngine extends EventEmitter {
       uptime: this.startedAt ? Math.floor((Date.now() - this.startedAt) / 1000) : 0,
       knownDeviceCount: deviceStore.list().length,
       onlineCount: this.latestScan ? this.latestScan.onlineCount : 0,
+      // onlineCount(このスキャンで検出できた台数)より低くなりうる:
+      // ping/arpのどちらかで見つかったがMACが解決できなかった台数。
+      // knownDeviceCount + unresolvedMacCount がおおよそ onlineCount に
+      // 一致する(既知デバイスの中にはこのスキャンではオフラインだった
+      // ものも含まれるため、必ずしも厳密な恒等式ではない)。
+      unresolvedMacCount: this.lastRecordStats ? this.lastRecordStats.skippedNoMac : 0,
     };
   }
 }

@@ -254,6 +254,8 @@ No `.env` file is required to run the app; every variable has a sensible default
 | `WEBHOOK_ENABLED` | `false` | Both this and `WEBHOOK_URL` are required for the generic webhook notifier to register |
 | `WEBHOOK_URL` | *(none)* | Any HTTP endpoint to receive the raw alert JSON |
 | `WEBHOOK_SECRET` | *(none)* | If set, signs the request body with HMAC-SHA256, sent as `X-SND-Signature` |
+| `LAN_DEVICES_PATH` | `./data/lanDevices.json` | Where the known-device ledger (`lan/deviceStore.js`) is persisted |
+| `LAN_SCAN_CIDR` | *(auto-detected)* | Override the subnet `lan/lanEngine.js` scans (e.g. `192.168.1.0/24`). Auto-detection (`lan/lanScanner.js`'s `detectLocalSubnet()`) picks the first non-internal IPv4 interface from `os.networkInterfaces()`, which can be the wrong one on a host with more than one active interface (VPN, a Docker virtual bridge, multiple NICs) — devices on the real LAN then never enter the scanned IP range at all. If the reported device count doesn't match reality, check for other active interfaces before assuming it's a detection bug |
 
 > Recommend testing the email notifier against a sandbox SMTP provider (e.g. [Ethereal](https://ethereal.email), Mailtrap) rather than a real inbox.
 
@@ -475,9 +477,12 @@ All endpoints are served from the running Express app; only endpoints that exist
   "lastError": null,
   "uptime": 3612,
   "knownDeviceCount": 14,
-  "onlineCount": 11
+  "onlineCount": 11,
+  "unresolvedMacCount": 2
 }
 ```
+
+`unresolvedMacCount` is how many devices this scan found (via ping and/or ARP) but couldn't resolve a MAC address for — they count toward `onlineCount` but not `knownDeviceCount`, since `lan/deviceStore.js` deliberately doesn't ledger a device with no stable identifier to key it by (see that file's header comment). This is the main source of `onlineCount` and `knownDeviceCount` looking inconsistent at a glance, and, along with `LAN_SCAN_CIDR` (see the environment variable table above), one of the two most likely explanations if the device count this tool reports doesn't match what you count by hand.
 </details>
 
 > 🧭 **Feeds into the Alert Engine, too.** `collectors/lanCollector.js` registers into the same `collectorRegistry` as CPU/memory/disk/network, exposing each known device on `/api/system` as `lan.devices.<mac_with_underscores_instead_of_colons>.online` (`0`/`1`). That means a per-device "went offline" alert rule (e.g. `{ "metric": "lan.devices.aa_bb_cc_dd_ee_ff.online", "operator": "<", "threshold": 1 }`) works today with zero changes to `alertEngine.js`/`ruleEvaluator.js` — it's the same dot-path `resolveMetric()` mechanism every other metric alert already uses.

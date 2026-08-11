@@ -71,6 +71,62 @@ describe("LanEngine (fresh instance per test)", () => {
     engine.stop();
   });
 
+  it("CRITICAL: getStatus().unresolvedMacCount reflects deviceStore.recordScan()'s skippedNoMac -- the diagnostic for onlineCount/knownDeviceCount diverging (a ping-only device has no stable MAC to key the ledger by, so it's excluded from it by design; this count is what makes that divergence visible instead of silently confusing)", async () => {
+    lanScanner.scan = async () => fakeScanResult({ onlineCount: 5 });
+    deviceStore.recordScan = () => ({ upserted: 3, skippedNoMac: 2, markedOffline: 0 });
+
+    const engine = new LanEngine();
+    engine.start(999_999);
+    await wait();
+
+    const status = engine.getStatus();
+    assert.equal(status.onlineCount, 5);
+    assert.equal(status.unresolvedMacCount, 2);
+    engine.stop();
+  });
+
+  describe("LAN_SCAN_CIDR override", () => {
+    const originalEnv = process.env.LAN_SCAN_CIDR;
+    afterEach(() => {
+      if (originalEnv === undefined) delete process.env.LAN_SCAN_CIDR;
+      else process.env.LAN_SCAN_CIDR = originalEnv;
+    });
+
+    it("passes LAN_SCAN_CIDR through to lanScanner.scan() as the cidr option, when set", async () => {
+      process.env.LAN_SCAN_CIDR = "10.0.0.0/28";
+      let receivedOptions;
+      lanScanner.scan = async (options) => {
+        receivedOptions = options;
+        return fakeScanResult();
+      };
+      deviceStore.recordScan = () => ({ upserted: 1, skippedNoMac: 0, markedOffline: 0 });
+
+      const engine = new LanEngine();
+      engine.start(999_999);
+      await wait();
+
+      assert.deepEqual(receivedOptions, { cidr: "10.0.0.0/28" });
+      engine.stop();
+    });
+
+    it("calls lanScanner.scan() with no cidr option when LAN_SCAN_CIDR is unset (auto-detect, unchanged default behavior)", async () => {
+      delete process.env.LAN_SCAN_CIDR;
+      let receivedOptions;
+      lanScanner.scan = async (options) => {
+        receivedOptions = options;
+        return fakeScanResult();
+      };
+      deviceStore.recordScan = () => ({ upserted: 1, skippedNoMac: 0, markedOffline: 0 });
+
+      const engine = new LanEngine();
+      engine.start(999_999);
+      await wait();
+
+      assert.deepEqual(receivedOptions, {});
+      engine.stop();
+    });
+  });
+
   it("emits 'update' with the scan result on success", async () => {
     const scanned = fakeScanResult();
     lanScanner.scan = async () => scanned;
@@ -178,6 +234,7 @@ describe("LanEngine (fresh instance per test)", () => {
         uptime: 0,
         knownDeviceCount: deviceStore.list().length,
         onlineCount: 0,
+        unresolvedMacCount: 0,
       });
     });
 
