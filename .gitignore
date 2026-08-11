@@ -3,3 +3,5 @@ node_modules/
 .env
 data/alertRules.json
 data/lanDevices.json
+data/lan-status-check.log
+data/lan-status-check-cron-stderr.log

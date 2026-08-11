@@ -285,6 +285,22 @@ curl http://localhost:3000/api/system | jq
 
 Stop the server with `Ctrl+C` — it shuts down the background poller cleanly before exiting.
 
+### Periodic LAN status check (cron)
+
+`lan/lanEngine.js` scans on its own 2-minute timer, but only while the server process is up, and only reports what it finds through the API — nothing watches it from the outside. `scripts/check-lan-status.js` is a small, standalone Node script for that: it polls `GET /api/lan/status` and appends one line to `data/lan-status-check.log` (gitignored, like the other local data files) — `OK ...` with the current counts on success, `ERROR ...` if the server didn't respond at all (down, crashed, hung) or returned something unexpected. Kept as an external check specifically so it still records "the server is unreachable" when the server itself can't (an in-process alert rule can't do that).
+
+Register it with cron to run every 5 minutes:
+
+```bash
+crontab -e
+```
+
+```cron
+*/5 * * * * cd /path/to/SND_HOME && /usr/local/bin/node scripts/check-lan-status.js >> data/lan-status-check-cron-stderr.log 2>&1
+```
+
+(Use the absolute path to `node` — `which node` — since cron's `PATH` is minimal and won't necessarily include it.) The `>> ... 2>&1` redirect only ever catches something going wrong in the script itself (a crash before it gets to write its own log); the script's normal output, including failures reaching the server, goes to `data/lan-status-check.log`.
+
 ---
 
 ## 📡 API
