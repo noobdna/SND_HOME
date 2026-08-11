@@ -2,8 +2,12 @@
 // システム情報系のルート(/api/system, /api/health, /api/system/latest, /api/system/history)。
 // server.js から抽出したもので、動作・レスポンス形状は変更しない。
 const express = require("express");
-const { collectAll } = require("../monitor/collectorRegistry");
-const { getLatestSystemInfo, getStatus, getHistory } = require("../monitor/monitorEngine");
+// collectorRegistry/monitorEngine はモジュールオブジェクトごと require する
+// (分割代入で取り出さない) -- monitor/monitorEngine.js が collectorRegistry を
+// 同じ流儀で require しているのと同じ理由: テストが monkey-patch で実コマンド/
+// 実タイマーに触れずに検証できるようにするため。
+const collectorRegistry = require("../monitor/collectorRegistry");
+const monitorEngine = require("../monitor/monitorEngine");
 
 const router = express.Router();
 
@@ -11,9 +15,9 @@ const router = express.Router();
 // キャッシュが未生成(起動直後の一瞬など)の場合のみ、その場でcollectAll()を実行する。
 router.get("/system", async (req, res) => {
   try {
-    let info = getLatestSystemInfo();
+    let info = monitorEngine.getLatestSystemInfo();
     if (!info) {
-      info = await collectAll();
+      info = await collectorRegistry.collectAll();
     }
     res.json(info);
   } catch (error) {
@@ -31,7 +35,7 @@ router.get("/health", (req, res) => {
 // 常時監視エンジンが保持する最新値を返す(collectAllは直接呼ばない)
 router.get("/system/latest", (req, res) => {
   try {
-    const info = getLatestSystemInfo();
+    const info = monitorEngine.getLatestSystemInfo();
     if (!info) {
       res.status(503).json({
         status: "error",
@@ -54,11 +58,11 @@ router.get("/system/history", (req, res) => {
   try {
     const limitParam = parseInt(req.query.limit, 10);
     const limit = Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 120;
-    const data = getHistory({ limit });
+    const data = monitorEngine.getHistory({ limit });
     res.json({
       status: "ok",
       count: data.length,
-      interval: getStatus().interval,
+      interval: monitorEngine.getStatus().interval,
       data,
     });
   } catch (error) {
