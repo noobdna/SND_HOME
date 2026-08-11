@@ -233,4 +233,28 @@ describe("persistence (load/persist, temp paths only)", () => {
     persist(nestedPath);
     assert.ok(fs.existsSync(nestedPath));
   });
+
+  // fs はモジュール全体を require しているため(分割代入ではない)、fs.readFileSync
+  // を一時的にモンキーパッチして existsSync 通過後の読み取り失敗(パーミッション等)を
+  // 再現できる -- alerts/ruleStore.test.js の同種のテストと同じ手法。
+  it("load() resets to empty and warns without throwing when the file exists but can't be read", () => {
+    const file = getDevicesPath();
+    fs.writeFileSync(file, JSON.stringify([{ mac: "aa:bb:cc:dd:ee:ff" }]));
+    recordScan(scanResult([{ ip: "192.168.1.1", mac: "11:22:33:44:55:66", online: true }])); // pollute the in-memory store first
+
+    const originalReadFileSync = fs.readFileSync;
+    fs.readFileSync = (targetPath, ...rest) => {
+      if (targetPath === file) {
+        throw new Error("EACCES: permission denied");
+      }
+      return originalReadFileSync(targetPath, ...rest);
+    };
+    try {
+      const result = load(file);
+      assert.deepEqual(result, { loaded: 0, skipped: 0 });
+      assert.deepEqual(list(), []);
+    } finally {
+      fs.readFileSync = originalReadFileSync;
+    }
+  });
 });
