@@ -54,4 +54,8 @@ module.exports = {
   record: (snapshot) => store.record(snapshot),
   getHistory: (options) => store.getHistory(options),
   getMaxPoints: () => store.maxPoints,
+  // テスト用: 実運用の(720件・共有シングルトンの)storeとは別に、小さい
+  // maxPoints で独立したインスタンスを都度生成してリングバッファの境界条件を
+  // 検証できるようにする -- lan/lanEngine.js の LanEngine エクスポートと同じ理由。
+  HistoryStore,
 };
