@@ -7,6 +7,7 @@ const cpuCollector = require("../collectors/cpuCollector");
 const memoryCollector = require("../collectors/memoryCollector");
 const diskCollector = require("../collectors/diskCollector");
 const networkCollector = require("../collectors/networkCollector");
+const lanCollector = require("../collectors/lanCollector");
 
 const collectors = [];
 
@@ -47,5 +48,12 @@ register(cpuCollector);
 register(memoryCollector);
 register(diskCollector);
 register(networkCollector);
+// lan/lanEngine.js の独立タイマー(既定2分間隔)がまだ起動されていない限り、
+// scanned:false のまま返る -- server.js側でlanEngine.startLanScanning()を
+// 呼ぶ配線(Stage 4の対象、今回はまだ未着手)が入るまでは常にこの状態。
+// 追加のみのフィールドのため、既存の /api/system レスポンス形状との互換性は
+// 保たれる(collectors/networkCollector.js が rxBytes/txBytes を追加した際の
+// 既存方針と同じ)。
+register(lanCollector);
 
 module.exports = { register, collectAll };
