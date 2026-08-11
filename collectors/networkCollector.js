@@ -8,9 +8,28 @@
 const os = require("os");
 const { execFile } = require("child_process");
 
-function runNetstat() {
+// このCollectorは monitorEngine.js の5秒間隔のティックに直接組み込まれる
+// (lan/lanEngine.js のような独立タイマーを持たない)。テスト中に実測したところ
+// `netstat -ib` はこの開発機で約5秒かかる(host名解決等の環境要因と見られる --
+// `netstat -ib | head` のようにパイプを早期に閉じると SIGPIPE で早期終了する
+// ため気づきにくい)。lan/lanScanner.js の `arp -a` で踏んだのと全く同じ
+// タイムアウト無しハングの罠であり、ここでは5秒ティックの真っ只中で発生する
+// ため影響がより深刻 -- monitorEngine.js には(lanEngine.jsのscanningガードの
+// ような)tick再入防止が無く、netstatがティック間隔と同じかそれ以上かかると
+// tickが詰まっていく。pingHost/readArpTable と同じ execFile の `timeout`
+// オプションで必ず上限を課す。
+const DEFAULT_NETSTAT_TIMEOUT_MS = 2000;
+
+/**
+ * `netstat -ib` を実行する。execFileImpl は lan/lanScanner.js の pingHost()/
+ * readArpTable() と同じ依存性注入パターン -- 実コマンドを叩かずテストできる
+ * ようにするため(既定は本物の execFile)。timeoutMs は上のコメント参照。
+ * @param {{ timeoutMs?: number, execFileImpl?: Function }} [options]
+ * @returns {Promise<string>}
+ */
+function runNetstat({ timeoutMs = DEFAULT_NETSTAT_TIMEOUT_MS, execFileImpl = execFile } = {}) {
   return new Promise((resolve, reject) => {
-    execFile("netstat", ["-ib"], (error, stdout) => {
+    execFileImpl("netstat", ["-ib"], { timeout: timeoutMs }, (error, stdout) => {
       if (error) {
         reject(error);
         return;
@@ -52,7 +71,15 @@ function parseThroughput(stdout, interfaceName) {
 
 module.exports = {
   name: "network",
-  async collect() {
+  parseThroughput,
+  runNetstat,
+  // collect() 自体への execFileImpl の受け渡しは collectorRegistry.js からは
+  // 一切使われない(常に引数無しで呼ばれる)が、runNetstat() 単体だけでなく
+  // 「netstat失敗時にinterfaces/localIpはそのまま返る」というcollect()内の
+  // グレースフルデグレード分岐(下のtry/catch)自体をテストで直接再現するために
+  // 必要 -- lan/lanScanner.js の scan() が pingHostImpl/readArpTableImpl を
+  // 受け取るのと同じ理由。
+  async collect({ execFileImpl } = {}) {
     const nets = os.networkInterfaces();
     const interfaces = [];
     let localIp = null;
@@ -79,7 +106,7 @@ module.exports = {
 
     if (primaryInterfaceName) {
       try {
-        const stdout = await runNetstat();
+        const stdout = await runNetstat({ execFileImpl });
         const throughput = parseThroughput(stdout, primaryInterfaceName);
         if (throughput) {
           rxBytes = throughput.rxBytes;
