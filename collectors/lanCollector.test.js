@@ -134,4 +134,29 @@ describe("lanCollector", () => {
     assert.deepEqual(result.devices, {});
     assert.equal(result.knownDeviceCount, 0);
   });
+
+  it("calls deviceStore.list() only once per collect() (regression: knownDeviceCount used to re-call list() instead of reusing the array used to build devices)", async () => {
+    const scanResult = {
+      scannedAt: "2026-01-01T00:00:00.000Z",
+      devices: [{ ip: "192.168.1.1", mac: "aa:bb:cc:dd:ee:ff", vendor: "NETGEAR", respondedToPing: true, inArpTable: true, online: true }],
+      totalScanned: 1,
+      onlineCount: 1,
+    };
+    deviceStore.recordScan(scanResult);
+    lanEngine.getLatestScan = () => scanResult;
+
+    const originalList = deviceStore.list;
+    let callCount = 0;
+    deviceStore.list = (...args) => {
+      callCount++;
+      return originalList.apply(deviceStore, args);
+    };
+    try {
+      const result = await lanCollector.collect();
+      assert.equal(result.knownDeviceCount, 1); // still correct, just computed without a second list() call
+    } finally {
+      deviceStore.list = originalList;
+    }
+    assert.equal(callCount, 1);
+  });
 });

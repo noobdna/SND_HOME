@@ -47,8 +47,13 @@ module.exports = {
   async collect() {
     const latest = lanEngine.getLatestScan();
 
+    // list() は呼ぶたびに台帳全体を複製する(deviceStore.js の cloneDevice()
+    // 参照)ため、同じ結果を件数(knownDeviceCount)にも使い回し、5秒ごとの
+    // collect() 呼び出しで無駄にMap全体を2回走査・複製しない。
+    const knownDevices = deviceStore.list();
+
     const devices = {};
-    for (const device of deviceStore.list()) {
+    for (const device of knownDevices) {
       devices[macToKey(device.mac)] = {
         ip: device.ip,
         vendor: device.vendor,
@@ -68,7 +73,7 @@ module.exports = {
       scannedAt: latest ? latest.scannedAt : null,
       onlineCount: latest ? latest.onlineCount : 0,
       totalScanned: latest ? latest.totalScanned : 0,
-      knownDeviceCount: deviceStore.list().length,
+      knownDeviceCount: knownDevices.length,
       devices,
     };
   },
