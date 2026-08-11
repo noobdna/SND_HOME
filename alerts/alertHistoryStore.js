@@ -52,4 +52,8 @@ module.exports = {
   record: (alert) => store.record(alert),
   getHistory: (options) => store.getHistory(options),
   getMaxEntries: () => store.maxEntries,
+  // テスト用: 実運用の(500件・共有シングルトンの)storeとは別に、小さい
+  // maxEntries で独立したインスタンスを都度生成してリングバッファの境界条件を
+  // 検証できるようにする -- monitor/historyStore.js の HistoryStore エクスポートと同じ理由。
+  AlertHistoryStore,
 };
