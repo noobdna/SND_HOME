@@ -66,6 +66,16 @@ The plan's original bridge-mode row predicted "silently returns zero real device
 
 Net effect for an operator is the same as the original prediction (no LAN device data under bridge mode), but the mechanism is better than "silent": a loud, diagnosable `lastError` rather than an empty-but-technically-successful scan — consistent with this codebase's general aversion to silently-wrong results (`613236f`, `unresolvedMacCount`). Documented in `PHASE6_DOCKER_PLAN.md`'s Central Design Decision section and Stage 4 checklist, and `README.md`'s Docker comparison table.
 
+### 4d. `macvlan` network, same genuine Linux host (2026-08-12) — works as designed, one caveat found along the way
+
+The plan's networking-mode table listed `macvlan` (the container gets its own MAC/IP directly on the physical LAN segment) as a third, more complex option, evaluated but not shipped in `docker-compose.yml`. Tested directly for completeness, the same way the two shipped modes were:
+
+- `docker network create -d macvlan --subnet=192.168.1.0/24 --gateway=192.168.1.1 -o parent=enxd83062a59025 snd_macvlan` (the host's wired NIC), then `docker run --network snd_macvlan --ip 192.168.1.199 ...`.
+- **From another machine on the real LAN** (the Mac), `curl http://192.168.1.199:3000/api/lan/status` succeeded immediately and returned `knownDeviceCount: 13, onlineCount: 15, unresolvedMacCount: 1` — real device data, matching the same real-neighbor set seen in the `network_mode: host` run's `arp -an`.
+- **The Docker host itself could not reach the container over the macvlan's own parent interface** (`curl --interface enxd83062a59025 ...` timed out) — a well-known Linux kernel restriction (a macvlan parent and its own children can't exchange traffic directly), not a bug. Confirmed as specifically about the parent interface, not about host-vs-container access in general, by successfully reaching the container via the host's *other* NIC instead (`curl --interface wlp1s0b1 ...` succeeded). A single-NIC host would need the standard macvlan-shim workaround to reach its own container's dashboard directly.
+
+`macvlan`'s row in `PHASE6_DOCKER_PLAN.md`'s table is now measured, not just reasoned about. It remains an unshipped, opt-in-only option (more setup complexity than this project's "no build step, no bundler" philosophy wants as a default) — this test confirmed it works as advertised for anyone who sets it up themselves, and documented the host-reachability caveat they'd hit.
+
 ---
 
 ## Timeline summary
@@ -78,3 +88,4 @@ Net effect for an operator is the same as the original prediction (no LAN device
 | 2026-08-12 | Docker `network_mode: host` tested on genuine Linux Mint hardware — LAN parity **confirmed** via identical `arp -an` output between container and host |
 | 2026-08-12 | `ed133b8` — `PHASE6_DOCKER_PLAN.md` and `README.md` updated with the genuine-Linux results; verification artifacts cleaned up from the Linux host |
 | 2026-08-12 | Default bridge mode tested on the same Linux host — confirmed non-functional for LAN Device Monitoring (Docker's `/16` bridge subnet trips `lan/lanScanner.js`'s `MAX_HOSTS` safety cap), system monitoring/reachability unaffected; docs updated again, artifacts cleaned up |
+| 2026-08-12 | `macvlan` network tested on the same Linux host — confirmed real LAN identity/data from other LAN devices, plus a newly-documented caveat: the Docker host can't reach the container over the macvlan's own parent interface (kernel restriction), though it can via any other NIC on the same subnet; docs updated, network/artifacts cleaned up |
