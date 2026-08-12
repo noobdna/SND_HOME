@@ -1,6 +1,6 @@
 # Phase 6 Implementation Plan — Docker Support
 
-**Status:** Design spec — no code written yet.
+**Status:** Implemented and fully verified. `Dockerfile`/`docker-compose.yml`/`.dockerignore` shipped; all three networking modes (`network_mode: host`, default bridge, `macvlan`) measured against real hardware — see the Central Design Decision section's empirical-verification entries and Stage 4 below. Roadmap's Docker support line is checked off in `README.md`.
 **Depends on:** Nothing. Phase 5 (Alerting & Notifications) is code-complete; this phase does not touch it.
 **Scope:** Phase 6 in README's Roadmap lists four items — Docker support, Cloudflare Tunnel integration, a Raspberry Pi agent, and multi-node monitoring. This document covers **Docker support only**, the first of the four. The other three are not addressed here and may each want their own plan document later, the same way this one exists separately from `PHASE5_PLAN.md`.
 
@@ -195,7 +195,7 @@ No changes to any existing file's *behavior* are anticipated. README gets a new 
 
 ### Stage 5 — README documentation *(30 min)*
 - [x] New `## 🐳 Docker` section: `docker compose up` quick start, the host-vs-bridge trade-off table from this doc, a note that `LAN_SCAN_CIDR` is the operator's escape hatch for multi-interface hosts
-- [x] Added Docker to Tech Stack; Roadmap's `[ ] Docker support` line left **unchecked**, with a note explaining why (see Environment note above) rather than checked prematurely
+- [x] Added Docker to Tech Stack; Roadmap's `Docker support` line was initially left unchecked pending real verification (see Environment notes above), then **checked off** once all three networking modes were empirically confirmed on genuine Linux hardware (2026-08-12)
 - [x] Re-read the full section for internal consistency with the Networking Mode table above
 
 ### Stage 6 — Regression check *(15 min)*
