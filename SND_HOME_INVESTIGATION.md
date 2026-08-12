@@ -56,6 +56,16 @@ Closed this gap on a genuine Linux Mint 22 host, `masa@192.168.1.44` (kernel `6.
 
 Documented in full in `PHASE6_DOCKER_PLAN.md`'s Central Design Decision section and Stage 4 checklist, and in `README.md`'s Docker comparison table (commit `ed133b8`). Verification artifacts (the `snd-home-verify` image and `~/SND_HOME_verify` clone) were removed from the Linux host afterward; only shared base images (`node:20-bookworm-slim`, `hello-world`) were left in place.
 
+### 4c. Default bridge mode, same genuine Linux host (2026-08-12) — prediction confirmed, mechanism was different than expected
+
+The plan's original bridge-mode row predicted "silently returns zero real devices." Tested directly (fresh clone + build + `docker run` with no `--network` flag, `-p 3001:3000`) to check that prediction the same way the others were checked:
+
+- `docker exec ... ip addr show eth0` showed `172.17.0.2/16` — Docker's default bridge, a full `/16` (65,534 usable hosts).
+- That size trips `lan/lanScanner.js`'s own pre-existing `MAX_HOSTS=1024` safety cap. **The scan refused to run at all**, rather than running and quietly finding nothing: `GET /api/lan/status` returned `knownDeviceCount: 0, onlineCount: 0, lastError: "Refusing to enumerate 65534 hosts for 172.17.0.0/16 (exceeds the 1024-host safety cap)"`.
+- System monitoring, alerting, and dashboard reachability were all unaffected, as predicted — `curl http://localhost:3001/api/health` and `/api/system` both succeeded from the host via the mapped port.
+
+Net effect for an operator is the same as the original prediction (no LAN device data under bridge mode), but the mechanism is better than "silent": a loud, diagnosable `lastError` rather than an empty-but-technically-successful scan — consistent with this codebase's general aversion to silently-wrong results (`613236f`, `unresolvedMacCount`). Documented in `PHASE6_DOCKER_PLAN.md`'s Central Design Decision section and Stage 4 checklist, and `README.md`'s Docker comparison table.
+
 ---
 
 ## Timeline summary
@@ -67,3 +77,4 @@ Documented in full in `PHASE6_DOCKER_PLAN.md`'s Central Design Decision section 
 | — | Docker `network_mode: host` tested via Colima (macOS) — LAN parity found **not** to hold, container also unreachable from `localhost` |
 | 2026-08-12 | Docker `network_mode: host` tested on genuine Linux Mint hardware — LAN parity **confirmed** via identical `arp -an` output between container and host |
 | 2026-08-12 | `ed133b8` — `PHASE6_DOCKER_PLAN.md` and `README.md` updated with the genuine-Linux results; verification artifacts cleaned up from the Linux host |
+| 2026-08-12 | Default bridge mode tested on the same Linux host — confirmed non-functional for LAN Device Monitoring (Docker's `/16` bridge subnet trips `lan/lanScanner.js`'s `MAX_HOSTS` safety cap), system monitoring/reachability unaffected; docs updated again, artifacts cleaned up |
