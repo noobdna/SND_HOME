@@ -30,3 +30,32 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+
+  # Optional Cloudflare Tunnel sidecar. See PHASE6_CLOUDFLARE_TUNNEL_PLAN.md
+  # for the full setup steps and the security note below in more detail.
+  #
+  # Off by default -- `docker compose up` alone never starts this, only
+  # `docker compose --profile tunnel up` does (the `profiles:` line below).
+  # network_mode: host mirrors snd-home's own default, so cloudflared reaches
+  # the app at http://localhost:$PORT the same way a plain `curl` from the
+  # host already does -- no container-to-container networking to configure.
+  # depends_on's service_healthy reuses the Dockerfile's existing
+  # HEALTHCHECK (GET /api/health) so cloudflared doesn't route traffic
+  # before the app is actually up.
+  #
+  # SECURITY: a tunnel only gets traffic to this origin -- it does not add
+  # authentication. Set CLOUDFLARE_TUNNEL_TOKEN in .env (see .env.example),
+  # and put Cloudflare Access (Zero Trust > Access > Applications) in front
+  # of the tunnel hostname if you want real authentication before exposing
+  # this beyond your LAN -- API_KEY alone still only gates mutating
+  # alert/notifier endpoints and all of /api/lan, per README's Auth section.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: snd-home-tunnel
+    network_mode: host
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      snd-home:
+        condition: service_healthy

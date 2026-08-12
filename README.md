@@ -142,17 +142,17 @@ graph LR
         A["Single-node<br/>SND@HOME instance"]
         B["Alert Engine"]
         C["Discord / Slack / Email / Webhook"]
+        F["Cloudflare Tunnel<br/>(opt-in, config ready —<br/>live reachability<br/>verification pending)"]
     end
 
     subgraph Vision["🔭 Vision — not yet built"]
         D["Raspberry Pi Agents"]
         E["Multi-node Aggregator"]
-        F["Cloudflare Tunnel"]
     end
 
     A --> B --> C
-    A -.-> D --> E
     A -.-> F
+    A -.-> D --> E
 ```
 
 ---
@@ -169,6 +169,7 @@ graph LR
 - **Notifications:** Discord/Slack/generic webhook via Node's built-in `fetch` (no HTTP client dependency); email via [`nodemailer`](https://www.npmjs.com/package/nodemailer) (the only notification-related dependency — Node has no built-in SMTP client)
 - **Testing:** Node's built-in [`node:test`](https://nodejs.org/api/test.html) runner + [`supertest`](https://www.npmjs.com/package/supertest) for HTTP integration tests — no Jest/Mocha, keeping with the dependency-light philosophy
 - **Containerization:** Docker, single-stage build from `node:20-bookworm-slim` (not Alpine — see [`PHASE6_DOCKER_PLAN.md`](PHASE6_DOCKER_PLAN.md) for why) — optional, `npm start` remains the primary supported path
+- **Remote access:** [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) via the official `cloudflare/cloudflared` image — optional, off by default (Compose `profile: tunnel`); see [`PHASE6_CLOUDFLARE_TUNNEL_PLAN.md`](PHASE6_CLOUDFLARE_TUNNEL_PLAN.md)
 
 > **Platform note:** the disk and network collectors shell out to `df -k /` and `netstat -ib`. This has been developed and tested on macOS; `df` is portable to Linux, but `netstat -ib` uses BSD-style flags — on Linux the network throughput fields (`rxBytes`/`txBytes`) may come back `null` depending on your `netstat`/`net-tools` version. Everything else works cross-platform.
 
@@ -210,7 +211,7 @@ graph LR
   - SSL certificate monitoring and DNS monitoring were dropped from this phase's actual implementation scope; see [Upcoming](#-features) for their current status
 - [ ] **Phase 6 — Distributed & Self-Hosted Platform** 📋 *Planned*
   - [x] Docker support — **fully verified**, all three networking modes measured against real hardware, none left as reasoned-but-untested. `Dockerfile`/`docker-compose.yml`/`.dockerignore` per [`PHASE6_DOCKER_PLAN.md`](PHASE6_DOCKER_PLAN.md); `npm test` unaffected (356/356). `docker build` and container startup/healthcheck confirmed working on both macOS (via Colima) and genuine Linux. Networking mode verification (see the [Docker section](#-docker) above for full measured numbers): `network_mode: host` (the compose file's default) — **falsified on macOS/Colima** (scoped to the VM's own subnet, container not even reachable from the Mac's own `localhost`) but **confirmed full real-LAN parity on genuine Linux** (2026-08-12, Linux Mint 22, `masa@192.168.1.44` — `docker exec ... arp -an` matched the bare host's `arp -an` exactly); default bridge mode — confirmed non-functional for LAN Device Monitoring on Linux, though via a loud `MAX_HOSTS` safety-cap error rather than the originally-predicted silent zero-devices result, with system monitoring/alerting/reachability unaffected; `macvlan` (opt-in, not shipped in `docker-compose.yml`) — confirmed full real-LAN identity/data on Linux, with a documented caveat that the Docker host itself can't reach the container over the macvlan's own parent interface (a kernel restriction), though it can via any other NIC on the same subnet
-  - [ ] Cloudflare Tunnel integration
+  - [x] Cloudflare Tunnel integration — **config + docs complete, live reachability verification pending a real Cloudflare account.** Optional `cloudflared` sidecar in `docker-compose.yml`, gated behind a Compose `profile: tunnel` (a plain `docker compose up` never starts it); `CLOUDFLARE_TUNNEL_TOKEN` added to `.env.example`; see the [Cloudflare Tunnel section](#-cloudflare-tunnel) above and [`PHASE6_CLOUDFLARE_TUNNEL_PLAN.md`](PHASE6_CLOUDFLARE_TUNNEL_PLAN.md) for the full design, including the deliberate decision to leave `middleware/auth.js`'s existing scoping unchanged and instead recommend Cloudflare Access as the real access-control layer. `npm test` unaffected (no application code touched — `cloudflared` is an external process, not app-aware). What's *not* verified: actually creating a tunnel, connecting a real hostname, and confirming public reachability — needs a real Cloudflare account/domain, not available in this session, the same category of gap as the Discord/Slack line below
   - [ ] Raspberry Pi agent
   - [ ] Multi-node monitoring
 
@@ -290,6 +291,24 @@ docker compose up
 **In practice, on macOS:** use default bridge mode (comment out `network_mode: host` in `docker-compose.yml`, uncomment the `ports:` block) if you want to reach the dashboard and use system monitoring + alerting — LAN Device Monitoring will report zero devices either way on a Mac, so `host` mode buys you nothing there except losing `localhost` access to your own dashboard. `network_mode: host` is only worth using on an actual Linux machine — and on Linux it's the recommended default, confirmed above rather than merely assumed. `macvlan` is a real alternative on Linux if you specifically need the dashboard to be reachable at its own LAN IP (not just via the Docker host's), at the cost of the host-reachability caveat above and setting it up yourself — not shipped in `docker-compose.yml` given this project's "no build step, no bundler" preference for keeping the default path simple. On a host with more than one active network interface, `LAN_SCAN_CIDR` (see the environment variable table above) is the escape hatch if auto-detection picks the wrong one inside the container — relevant on Linux, moot on macOS until the VM-networking gap above is addressed some other way.
 
 `data/` is bind-mounted (`./data:/app/data`) so alert rules and the LAN device ledger survive a `docker compose down && docker compose up`. See [`PHASE6_DOCKER_PLAN.md`](PHASE6_DOCKER_PLAN.md) for the full design rationale and the empirical findings above in more detail.
+
+### ☁️ Cloudflare Tunnel
+
+Expose your dashboard to the public internet without port-forwarding, a static IP, or opening any inbound firewall rule — `cloudflared` connects *outbound* to Cloudflare's edge, so nothing needs to be reachable from the internet on your router at all. Fully opt-in and additive: skip this section entirely and nothing about your setup changes.
+
+```bash
+cloudflared tunnel login                    # one-time, opens a browser to authenticate
+cloudflared tunnel create snd-home          # creates the tunnel
+# In the Cloudflare Zero Trust dashboard (Networks > Tunnels), connect the
+# new tunnel to a public hostname, pointed at http://localhost:3000 (or your
+# PORT). Its "Docker" install method shows a `tunnel run --token <token>`
+# command -- copy just the token into .env's CLOUDFLARE_TUNNEL_TOKEN.
+docker compose --profile tunnel up -d       # starts snd-home AND cloudflared
+```
+
+> ⚠️ **A tunnel is not authentication.** It gets traffic to your origin, nothing more — anyone who reaches your tunnel hostname reaches SND@HOME exactly as if they were on your LAN. `API_KEY` (see [Authentication](#-api) above) still only gates mutating alert/notifier endpoints and all of `/api/lan/*` — every other `GET` endpoint (system stats, alert rules/history, health) stays public. **Before relying on this beyond casual/trusted use, add a Cloudflare Access policy** (Zero Trust > Access > Applications — email OTP, Google/GitHub SSO, IP allowlists) in front of the tunnel hostname. This authenticates at Cloudflare's edge, before a request ever reaches your server — strictly stronger than app-level auth for this purpose, and doesn't require distributing an API key to anyone who needs read access.
+
+The `cloudflared` service in `docker-compose.yml` is off by default — a plain `docker compose up` never starts it, only `docker compose --profile tunnel up` does — and runs with `network_mode: host` just like `snd-home` itself, reaching it at `localhost:$PORT` the same way a local `curl` already does. See [`PHASE6_CLOUDFLARE_TUNNEL_PLAN.md`](PHASE6_CLOUDFLARE_TUNNEL_PLAN.md) for the full design rationale, including why the existing auth scoping was deliberately left unchanged rather than extended to cover this.
 
 ---
 
