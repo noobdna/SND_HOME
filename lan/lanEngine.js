@@ -133,6 +133,11 @@ class LanEngine extends EventEmitter {
       lastError: this.lastError,
       uptime: this.startedAt ? Math.floor((Date.now() - this.startedAt) / 1000) : 0,
       knownDeviceCount: deviceStore.list().length,
+      // 手動グルーピング(lan/deviceStore.js の groupTerminal())をまだ一度も使って
+      // いない場合、knownTerminalCount は常に knownDeviceCount と等しい(=1台ずつが
+      // それぞれ自分自身だけの端末として数えられるため)。既存のknownDeviceCountは
+      // そのまま残し、この値は追加のみ(既存の消費者に一切影響しない)。
+      knownTerminalCount: deviceStore.listTerminals().length,
       onlineCount: this.latestScan ? this.latestScan.onlineCount : 0,
       // onlineCount(このスキャンで検出できた台数)より低くなりうる:
       // ping/arpのどちらかで見つかったがMACが解決できなかった台数。

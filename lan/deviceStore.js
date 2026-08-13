@@ -86,6 +86,7 @@ function recordScan(scanResult) {
       ip: scanned.ip,
       vendor: scanned.vendor,
       nickname: existing ? existing.nickname : null,
+      terminalId: existing ? existing.terminalId : null,
       online: true,
       respondedToPing: Boolean(scanned.respondedToPing),
       inArpTable: Boolean(scanned.inArpTable),
@@ -156,6 +157,113 @@ function setNickname(mac, nickname) {
   devices.set(mac, updated);
   persist();
   return cloneDevice(updated);
+}
+
+/**
+ * 複数インターフェース(Wi-Fi/有線等、MACが異なる)を同一の物理端末として
+ * グルーピングする(手動のみ — 自動/推測による相関は行わない。理由は
+ * lan/deviceStore.js冒頭コメントと同じ「安全側の判断」方針: 自動相関が
+ * 誤って別々の実機を1台に統合してしまうと、片方が監視から見えなくなる
+ * リスクの方が、手動グルーピングの手間より重いと判断)。
+ * primaryMac自身のterminalIdは変更しない(常にnull=「グループの代表」の
+ * ままにする) — グループの実効ID(listTerminals()参照)はprimaryMacの
+ * mac自身がそのまま使われるため。
+ * @param {string} mac グルーピング対象(既存デバイス)
+ * @param {string|null} primaryMac 所属させる先の代表デバイスのmac。nullで解除(ungroupTerminalと同じ)
+ * @returns {object} 更新後のデバイス(複製)
+ * @throws {DeviceNotFoundError} mac または primaryMac が台帳に無い場合
+ * @throws {Error} mac === primaryMac の場合(name: "TerminalValidationError")
+ */
+function groupTerminal(mac, primaryMac) {
+  const existing = devices.get(mac);
+  if (!existing) {
+    throw new DeviceNotFoundError(mac);
+  }
+
+  if (primaryMac !== null) {
+    if (primaryMac === mac) {
+      const error = new Error("Cannot group a device with itself");
+      error.name = "TerminalValidationError";
+      throw error;
+    }
+    if (!devices.has(primaryMac)) {
+      throw new DeviceNotFoundError(primaryMac);
+    }
+  }
+
+  const updated = { ...existing, terminalId: primaryMac };
+  devices.set(mac, updated);
+  persist();
+  return cloneDevice(updated);
+}
+
+/**
+ * groupTerminal(mac, null) のショートハンド — グルーピングを解除する。
+ * @param {string} mac
+ * @returns {object} 更新後のデバイス(複製)
+ * @throws {DeviceNotFoundError} 対象デバイスが台帳に無い場合
+ */
+function ungroupTerminal(mac) {
+  return groupTerminal(mac, null);
+}
+
+/**
+ * ISO8601文字列の配列から最小/最大を選ぶ(null/undefined/空文字は無視)。
+ * ISO8601 UTC('Z'終端)は辞書式比較がそのまま時系列順と一致するため、
+ * Date化せず文字列比較で済ませる(このプロジェクトの他のタイムスタンプ
+ * 比較箇所と同じ簡便さの方針)。
+ * @param {Array<string|null>} values
+ * @param {"min"|"max"} mode
+ * @returns {string|null} 該当が無ければnull
+ */
+function pickTimestamp(values, mode) {
+  const valid = values.filter((v) => typeof v === "string" && v);
+  if (valid.length === 0) return null;
+  return mode === "min" ? valid.reduce((a, b) => (a < b ? a : b)) : valid.reduce((a, b) => (a > b ? a : b));
+}
+
+/**
+ * 台帳を「端末(物理機器)」単位に集約して返す。terminalIdが設定されて
+ * いないデバイスは、自分自身のmacを実効ID(=自分1台だけの端末)として扱う
+ * ため、一度もグルーピングを使わない運用では常に「台帳のMAC数 === 端末数」
+ * のまま(この機能を使わない限り挙動が一切変わらない、既存の全体方針と
+ * 同じ「オプトイン」設計)。
+ * displayIpはグループ内で最も lastSeenAt が新しいインターフェースのIPを
+ * 採用する(IPはDHCPで揺れるため識別子にはしない、が「今どのIPで見えて
+ * いるか」の表示にはこの基準が最も実態に近いと判断)。
+ * @returns {Array<{terminalId: string, displayIp: string|null, online: boolean, macs: string[], nickname: string|null, firstSeenAt: string|null, lastSeenAt: string|null}>}
+ */
+function listTerminals() {
+  const groups = new Map();
+  for (const device of devices.values()) {
+    const effectiveId = device.terminalId || device.mac;
+    if (!groups.has(effectiveId)) groups.set(effectiveId, []);
+    groups.get(effectiveId).push(device);
+  }
+
+  const terminals = [];
+  for (const [terminalId, members] of groups) {
+    const lastSeenAt = pickTimestamp(
+      members.map((d) => d.lastSeenAt),
+      "max",
+    );
+    const firstSeenAt = pickTimestamp(
+      members.map((d) => d.firstSeenAt),
+      "min",
+    );
+    const mostRecentMember = members.find((d) => d.lastSeenAt === lastSeenAt) || members[0];
+    const primary = members.find((d) => d.mac === terminalId) || mostRecentMember;
+    terminals.push({
+      terminalId,
+      displayIp: mostRecentMember.ip,
+      online: members.some((d) => d.online),
+      macs: members.map((d) => d.mac).sort(),
+      nickname: primary.nickname,
+      firstSeenAt,
+      lastSeenAt,
+    });
+  }
+  return terminals;
 }
 
 /**
@@ -231,6 +339,7 @@ function load(filePath = getDevicesPath()) {
       ip: device.ip ?? null,
       vendor: device.vendor ?? null,
       nickname: device.nickname ?? null,
+      terminalId: device.terminalId ?? null,
       // 再起動直後はまだ一度もスキャンしていないため、「最後に見えた時点の
       // online状態」をそのまま復元するのではなく、常に false から始める —
       // 実際にオンラインかどうかは次のスキャンが確定させる(古いキャッシュ値を
@@ -255,6 +364,9 @@ module.exports = {
   list,
   get,
   setNickname,
+  groupTerminal,
+  ungroupTerminal,
+  listTerminals,
   clear,
   load,
   persist,

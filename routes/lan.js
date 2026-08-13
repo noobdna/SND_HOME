@@ -2,9 +2,17 @@
 // LAN機器監視のREST API(/api/lan/*)。lan/deviceStore.js・lan/lanEngine.js を
 // 薄くラップするだけで、スキャンやビジネスロジックはここに書かない
 // (routes/alerts.js・routes/monitor.js と同じ「ルートは薄いアダプタ」方針)。
-//   GET   /devices       — 既知デバイス一覧(台帳全件、オンライン/オフライン問わず)
-//   GET   /devices/:mac  — 1台の詳細
-//   PATCH /devices/:mac  — ニックネームの設定/解除({ nickname: string|null })
+//   GET   /devices        — 既知デバイス一覧(台帳全件、オンライン/オフライン問わず)
+//   GET   /devices/:mac   — 1台の詳細
+//   PATCH /devices/:mac   — ニックネームの設定/解除({ nickname: string|null })、
+//                           および/または端末グルーピングの設定/解除
+//                           ({ terminalId: string|null })。どちらか一方、
+//                           または両方を同時に含められる(body内に最低1つは必須)。
+//   GET   /terminals      — 台帳をMACではなく「物理端末」単位に集約した一覧
+//                           (lan/deviceStore.js の listTerminals() 参照。手動で
+//                           グルーピングしていないデバイスは自分自身のmacを実効IDに
+//                           持つ1台だけの端末として扱われるため、この機能を一度も
+//                           使わない運用では devices と terminals は常に1対1)
 //   GET   /status         — lanEngine自体の稼働状態(monitorEngine/alertEngineの
 //                           GET .../status と同じく、envelopeで包まず生のオブジェクトを返す)
 //
@@ -59,13 +67,29 @@ router.get("/devices/:mac", (req, res) => {
 
 router.patch("/devices/:mac", (req, res) => {
   try {
-    const nickname = req.body && "nickname" in req.body ? req.body.nickname : undefined;
-    if (nickname === undefined) {
-      res.status(400).json({ status: "error", message: "Request body must include a 'nickname' field (string or null)" });
+    const body = req.body || {};
+    const hasNickname = "nickname" in body;
+    const hasTerminalId = "terminalId" in body;
+    if (!hasNickname && !hasTerminalId) {
+      res
+        .status(400)
+        .json({ status: "error", message: "Request body must include a 'nickname' and/or 'terminalId' field" });
       return;
     }
+
     // GET /devices/:mac と同じ理由(コメント参照)で正規化してから台帳を引く。
-    const device = deviceStore.setNickname(normalizeMac(req.params.mac), nickname);
+    const mac = normalizeMac(req.params.mac);
+    let device;
+    if (hasNickname) {
+      device = deviceStore.setNickname(mac, body.nickname);
+    }
+    if (hasTerminalId) {
+      // terminalId は台帳の別デバイスのmacをそのまま指す値のため、大文字/表記ゆれの
+      // 入力があっても既存キーと一致するよう同じ正規化を通す(nullはそのまま=解除)。
+      const terminalId = body.terminalId === null ? null : normalizeMac(body.terminalId);
+      device = deviceStore.groupTerminal(mac, terminalId);
+    }
+
     res.json({ status: "ok", data: device });
   } catch (error) {
     if (error instanceof deviceStore.DeviceNotFoundError) {
@@ -76,6 +100,18 @@ router.patch("/devices/:mac", (req, res) => {
       res.status(400).json({ status: "error", message: error.message, errors: error.errors });
       return;
     }
+    if (error.name === "TerminalValidationError") {
+      res.status(400).json({ status: "error", message: error.message });
+      return;
+    }
+    res.status(500).json({ status: "error", message: error.message || "Unknown error" });
+  }
+});
+
+router.get("/terminals", (req, res) => {
+  try {
+    res.json({ status: "ok", data: deviceStore.listTerminals() });
+  } catch (error) {
     res.status(500).json({ status: "error", message: error.message || "Unknown error" });
   }
 });

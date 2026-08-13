@@ -131,6 +131,79 @@ describe("PATCH /api/lan/devices/:mac", () => {
     assert.equal(res.body.data.mac, "aa:bb:cc:dd:ee:ff");
     assert.equal(res.body.data.nickname, "Living Room TV");
   });
+
+  it("groups a device under a primary device's mac via terminalId", async () => {
+    seedDevice("60:33:4b:2d:1e:64");
+    seedDevice("d8:30:62:a5:90:25");
+    const res = await request(app).patch("/api/lan/devices/d8:30:62:a5:90:25").send({ terminalId: "60:33:4b:2d:1e:64" });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.terminalId, "60:33:4b:2d:1e:64");
+  });
+
+  it("normalizes the terminalId's case the same way as the :mac param", async () => {
+    seedDevice("60:33:4b:2d:1e:64");
+    seedDevice("d8:30:62:a5:90:25");
+    const res = await request(app).patch("/api/lan/devices/d8:30:62:a5:90:25").send({ terminalId: "60:33:4B:2D:1E:64" });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.terminalId, "60:33:4b:2d:1e:64");
+  });
+
+  it("clears grouping with terminalId: null", async () => {
+    seedDevice("60:33:4b:2d:1e:64");
+    seedDevice("d8:30:62:a5:90:25");
+    await request(app).patch("/api/lan/devices/d8:30:62:a5:90:25").send({ terminalId: "60:33:4b:2d:1e:64" });
+    const res = await request(app).patch("/api/lan/devices/d8:30:62:a5:90:25").send({ terminalId: null });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.terminalId, null);
+  });
+
+  it("accepts nickname and terminalId together in one request", async () => {
+    seedDevice("60:33:4b:2d:1e:64");
+    seedDevice("d8:30:62:a5:90:25");
+    const res = await request(app)
+      .patch("/api/lan/devices/d8:30:62:a5:90:25")
+      .send({ nickname: "Living Room PC (wired)", terminalId: "60:33:4b:2d:1e:64" });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.nickname, "Living Room PC (wired)");
+    assert.equal(res.body.data.terminalId, "60:33:4b:2d:1e:64");
+  });
+
+  it("400s when grouping a device with itself", async () => {
+    seedDevice("60:33:4b:2d:1e:64");
+    const res = await request(app).patch("/api/lan/devices/60:33:4b:2d:1e:64").send({ terminalId: "60:33:4b:2d:1e:64" });
+    assert.equal(res.status, 400);
+  });
+
+  it("404s when terminalId points to an unknown mac", async () => {
+    seedDevice("d8:30:62:a5:90:25");
+    const res = await request(app).patch("/api/lan/devices/d8:30:62:a5:90:25").send({ terminalId: "00:00:00:00:00:00" });
+    assert.equal(res.status, 404);
+  });
+});
+
+describe("GET /api/lan/terminals", () => {
+  it("returns an empty list on a fresh store", async () => {
+    const res = await request(app).get("/api/lan/terminals");
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, { status: "ok", data: [] });
+  });
+
+  it("returns one terminal per ungrouped device, and a single combined terminal for grouped devices", async () => {
+    seedDevice("60:33:4b:2d:1e:64", { ip: "192.168.1.44" });
+    seedDevice("d8:30:62:a5:90:25", { ip: "192.168.1.239" });
+    seedDevice("aa:bb:cc:dd:ee:ff", { ip: "192.168.1.50" });
+    await request(app).patch("/api/lan/devices/d8:30:62:a5:90:25").send({ terminalId: "60:33:4b:2d:1e:64" });
+
+    const res = await request(app).get("/api/lan/terminals");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.data.length, 2);
+
+    const combined = res.body.data.find((t) => t.terminalId === "60:33:4b:2d:1e:64");
+    assert.deepEqual(combined.macs, ["60:33:4b:2d:1e:64", "d8:30:62:a5:90:25"]);
+
+    const solo = res.body.data.find((t) => t.terminalId === "aa:bb:cc:dd:ee:ff");
+    assert.deepEqual(solo.macs, ["aa:bb:cc:dd:ee:ff"]);
+  });
 });
 
 // 各エンドポイントの catch ブロックの「想定外エラー(型付き例外ではない)→ 500」分岐。
@@ -179,6 +252,34 @@ describe("error handling (unexpected errors -> 500)", () => {
       assert.deepEqual(res.body, { status: "error", message: "boom" });
     } finally {
       deviceStore.setNickname = original;
+    }
+  });
+
+  it("PATCH /devices/:mac 500s on a non-DeviceNotFoundError, non-validation error from groupTerminal", async () => {
+    const original = deviceStore.groupTerminal;
+    deviceStore.groupTerminal = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).patch("/api/lan/devices/aa:bb:cc:dd:ee:ff").send({ terminalId: null });
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      deviceStore.groupTerminal = original;
+    }
+  });
+
+  it("GET /terminals 500s and echoes the error message", async () => {
+    const original = deviceStore.listTerminals;
+    deviceStore.listTerminals = () => {
+      throw new Error("boom");
+    };
+    try {
+      const res = await request(app).get("/api/lan/terminals");
+      assert.equal(res.status, 500);
+      assert.deepEqual(res.body, { status: "error", message: "boom" });
+    } finally {
+      deviceStore.listTerminals = original;
     }
   });
 
@@ -250,6 +351,18 @@ describe("auth (whole router gated, unlike alerts/notifiers -- opt-in via API_KE
       .patch("/api/lan/devices/aa:bb:cc:dd:ee:ff")
       .set("Authorization", "Bearer secret-token")
       .send({ nickname: "x" });
+    assert.equal(res.status, 200);
+  });
+
+  it("with API_KEY configured, GET /terminals 401s without a matching Bearer token", async () => {
+    process.env.API_KEY = "secret-token";
+    const res = await request(app).get("/api/lan/terminals");
+    assert.equal(res.status, 401);
+  });
+
+  it("with API_KEY configured, GET /terminals succeeds with the correct Bearer token", async () => {
+    process.env.API_KEY = "secret-token";
+    const res = await request(app).get("/api/lan/terminals").set("Authorization", "Bearer secret-token");
     assert.equal(res.status, 200);
   });
 });
