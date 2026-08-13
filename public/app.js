@@ -4,6 +4,9 @@
 const REFRESH_INTERVAL_MS = 3000;
 const API_ENDPOINT = "/api/system";
 const HISTORY_ENDPOINT = "/api/system/history";
+const MONITOR_STATUS_ENDPOINT = "/api/monitor/status";
+const ALERTS_STATUS_ENDPOINT = "/api/alerts/engine/status";
+const LAN_STATUS_ENDPOINT = "/api/lan/status";
 const EVENTS_ENDPOINT = "/api/events";
 const AUTH_STATUS_ENDPOINT = "/api/auth/status";
 const CONNECTIONS_SOURCES_ENDPOINT = "/api/connections/sources";
@@ -31,6 +34,13 @@ const elements = {
   ipAddress: document.getElementById("ipAddress"),
   uptime: document.getElementById("uptime"),
   lastUpdated: document.getElementById("lastUpdated"),
+
+  monitorStatusDot: document.getElementById("monitorStatusDot"),
+  monitorStatusValue: document.getElementById("monitorStatusValue"),
+  alertsStatusDot: document.getElementById("alertsStatusDot"),
+  alertsStatusValue: document.getElementById("alertsStatusValue"),
+  lanStatusDot: document.getElementById("lanStatusDot"),
+  lanStatusValue: document.getElementById("lanStatusValue"),
 
   cpuChart: document.getElementById("cpuChart"),
   cpuHistoryValue: document.getElementById("cpuHistoryValue"),
@@ -233,6 +243,29 @@ function setOnlineStatus(isOnline) {
   elements.statusDot.classList.remove("online", "offline");
   elements.statusDot.classList.add(isOnline ? "online" : "offline");
   elements.statusText.textContent = isOnline ? "オンライン" : "接続エラー";
+}
+
+/**
+ * SNDサービス状態カードの1行分(dot + value)を更新する共通ヘルパー。
+ * @param {HTMLElement} dotEl
+ * @param {HTMLElement} valueEl
+ * @param {boolean} isRunning
+ * @param {string} runningText
+ */
+function setServiceRow(dotEl, valueEl, isRunning, runningText) {
+  dotEl.classList.remove("online", "offline");
+  dotEl.classList.add(isRunning ? "online" : "offline");
+  valueEl.textContent = isRunning ? runningText : "停止中";
+}
+
+/**
+ * SNDサービス状態カードの1行分を「取得失敗」状態にする。
+ * @param {HTMLElement} dotEl
+ * @param {HTMLElement} valueEl
+ */
+function setServiceRowError(dotEl, valueEl) {
+  dotEl.classList.remove("online", "offline");
+  valueEl.textContent = "--";
 }
 
 function showError(message) {
@@ -457,6 +490,45 @@ async function fetchHistory() {
 }
 
 /**
+ * 既存の /api/monitor/status・/api/alerts/engine/status・/api/lan/status を
+ * 個別に取得し、SNDサービス状態カードへ反映する。3つとも既存の(このカード
+ * のために新設したわけではない)ステータスエンドポイントで、バックエンドの
+ * 変更は一切不要。1つの取得が失敗しても他の行の表示は保つため、
+ * Promise.all ではなく Promise.allSettled を使う
+ * (notifierRegistry.dispatch() の「1チャンネルの失敗が他を巻き込まない」
+ * という既存方針と同じ考え方)。
+ */
+async function fetchServiceStatus() {
+  const [monitorResult, alertsResult, lanResult] = await Promise.allSettled([
+    fetch(MONITOR_STATUS_ENDPOINT).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+    fetch(ALERTS_STATUS_ENDPOINT).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+    fetch(LAN_STATUS_ENDPOINT).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+  ]);
+
+  if (monitorResult.status === "fulfilled") {
+    setServiceRow(elements.monitorStatusDot, elements.monitorStatusValue, Boolean(monitorResult.value.running), "稼働中");
+  } else {
+    setServiceRowError(elements.monitorStatusDot, elements.monitorStatusValue);
+  }
+
+  if (alertsResult.status === "fulfilled") {
+    const { running, rulesCount } = alertsResult.value;
+    const text = typeof rulesCount === "number" ? `稼働中 (${rulesCount}ルール)` : "稼働中";
+    setServiceRow(elements.alertsStatusDot, elements.alertsStatusValue, Boolean(running), text);
+  } else {
+    setServiceRowError(elements.alertsStatusDot, elements.alertsStatusValue);
+  }
+
+  if (lanResult.status === "fulfilled") {
+    const { running, onlineCount } = lanResult.value;
+    const text = typeof onlineCount === "number" ? `稼働中 (${onlineCount}台)` : "稼働中";
+    setServiceRow(elements.lanStatusDot, elements.lanStatusValue, Boolean(running), text);
+  } else {
+    setServiceRowError(elements.lanStatusDot, elements.lanStatusValue);
+  }
+}
+
+/**
  * /api/events を複数の絞り込みで取得し、「エラー/警告」「認証イベント」
  * 「イベントログ」の3枠を更新する。severity=warning,error の絞り込みが
  * 「エラー/警告」表示そのもの、category=auth の絞り込みが「認証イベント」
@@ -591,6 +663,9 @@ setInterval(fetchSystemInfo, REFRESH_INTERVAL_MS);
 
 fetchHistory();
 setInterval(fetchHistory, REFRESH_INTERVAL_MS);
+
+fetchServiceStatus();
+setInterval(fetchServiceStatus, REFRESH_INTERVAL_MS);
 
 fetchEvents();
 setInterval(fetchEvents, REFRESH_INTERVAL_MS);
