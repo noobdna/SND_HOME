@@ -9,6 +9,7 @@ const lanRoutes = require("./routes/lan");
 const eventsRoutes = require("./routes/events");
 const authRoutes = require("./routes/auth");
 const connectionsRoutes = require("./routes/connections");
+const piStatusRoutes = require("./routes/piStatus");
 const { trackRequests } = require("./middleware/requestTracker");
 const { startMonitoring, stopMonitoring } = require("./monitor/monitorEngine");
 const { start: startAlerting, stop: stopAlerting } = require("./alerts/alertEngine");
@@ -41,6 +42,7 @@ app.use("/api/lan", lanRoutes);
 app.use("/api/events", eventsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/connections", connectionsRoutes);
+app.use("/api/pi-status", piStatusRoutes);
 
 // ---------------------------------------------------------
 // サーバー起動
