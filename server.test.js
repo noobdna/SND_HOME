@@ -197,4 +197,32 @@ describe("real process (spawned `node server.js`)", () => {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
   });
+
+  it("ALERTS_ENABLED=false skips starting the alert engine, but ALERTS_ENABLED unset still starts it (default-on)", async () => {
+    const port = 34573;
+    const child = spawnServer({
+      PORT: String(port),
+      ALERTS_ENABLED: "false",
+      ALERTS_RULES_PATH: tmpFile("spawn-rules"),
+      LAN_DEVICES_PATH: tmpFile("spawn-devices"),
+    });
+    const stdout = captureStdout(child);
+
+    try {
+      await waitFor(stdout, /SND@HOME server listening on port/);
+      await wait(150);
+      assert.match(stdout.text, /\[alertEngine\] ALERTS_ENABLED=false — alert engine not started/);
+      assert.doesNotMatch(stdout.text, /Alert engine started/);
+
+      const res = await fetch(`http://localhost:${port}/api/alerts/engine/status`);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.running, false);
+
+      child.kill("SIGTERM");
+      await waitForExit(child);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+  });
 });
