@@ -243,6 +243,70 @@ body {
   background-color: var(--green);
 }
 
+/* Event Log */
+.log-section {
+  margin-top: 32px;
+}
+
+.log-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.log-list-compact {
+  max-height: 160px;
+}
+
+.log-empty {
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.log-entry:last-child {
+  border-bottom: none;
+}
+
+.log-time {
+  color: var(--text-secondary);
+  font-family: "Consolas", "SFMono-Regular", monospace;
+  flex-shrink: 0;
+}
+
+.log-category {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+.log-message {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.log-entry.severity-warning .log-message {
+  color: var(--yellow);
+}
+
+.log-entry.severity-error .log-message {
+  color: var(--red);
+}
+
 /* Footer */
 .footer {
   text-align: center;

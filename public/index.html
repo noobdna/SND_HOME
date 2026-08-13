@@ -77,6 +77,17 @@
           <span class="info-value" id="lastUpdated">--</span>
         </div>
       </div>
+
+      <!-- Errors / Warnings -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">エラー/警告</span>
+          <span class="card-value" id="errorsCount">--</span>
+        </div>
+        <ul class="log-list log-list-compact" id="errorsList">
+          <li class="log-empty">記録なし</li>
+        </ul>
+      </div>
     </section>
 
     <section class="chart-section">
@@ -117,6 +128,15 @@
             <span class="legend-item"><span class="legend-dot legend-tx"></span>送信</span>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section class="log-section">
+      <h2 class="section-title">イベントログ</h2>
+      <div class="card">
+        <ul class="log-list" id="eventLogList">
+          <li class="log-empty">記録なし</li>
+        </ul>
       </div>
     </section>
   </main>
