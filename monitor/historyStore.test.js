@@ -33,6 +33,7 @@ describe("HistoryStore (fresh instance per test)", () => {
         memory: { used: 1, total: 2, percent: 50 },
         disk: { used: 1, total: 2, percent: 25 },
         network: { interfaces: [{ name: "en0" }], localIp: "1.2.3.4", rxBytes: 111, txBytes: 222 },
+        connections: { current: 3, requestsLastMinute: 42, totalRequestsServed: 999 },
         load: [1, 1, 1],
       });
 
@@ -43,11 +44,12 @@ describe("HistoryStore (fresh instance per test)", () => {
           memory: { percent: 50 },
           disk: { percent: 25 },
           network: { rxBytes: 111, txBytes: 222 },
+          connections: { current: 3, requestsLastMinute: 42 },
         },
       ]);
     });
 
-    it("substitutes null for cpu/memory/disk/network when the sub-object is missing (graceful degradation)", () => {
+    it("substitutes null for cpu/memory/disk/network/connections when the sub-object is missing (graceful degradation)", () => {
       const store = new HistoryStore();
       store.record({ timestamp: "2026-01-01T00:00:00.000Z" });
 
@@ -58,6 +60,7 @@ describe("HistoryStore (fresh instance per test)", () => {
           memory: { percent: null },
           disk: { percent: null },
           network: { rxBytes: null, txBytes: null },
+          connections: { current: null, requestsLastMinute: null },
         },
       ]);
     });

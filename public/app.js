@@ -6,6 +6,7 @@ const API_ENDPOINT = "/api/system";
 const HISTORY_ENDPOINT = "/api/system/history";
 const EVENTS_ENDPOINT = "/api/events";
 const AUTH_STATUS_ENDPOINT = "/api/auth/status";
+const CONNECTIONS_SOURCES_ENDPOINT = "/api/connections/sources";
 
 // DOM要素の参照をキャッシュ
 const elements = {
@@ -45,6 +46,13 @@ const elements = {
 
   authEnforcedValue: document.getElementById("authEnforcedValue"),
   authEventsList: document.getElementById("authEventsList"),
+
+  connectionsCurrent: document.getElementById("connectionsCurrent"),
+  connectionsSub: document.getElementById("connectionsSub"),
+  sourceIpList: document.getElementById("sourceIpList"),
+
+  connectionsChart: document.getElementById("connectionsChart"),
+  connectionsHistoryValue: document.getElementById("connectionsHistoryValue"),
 };
 
 // チャートの色はCSSカスタムプロパティ(テーマ)から取得し、既存の配色と統一する
@@ -142,6 +150,47 @@ function renderLogEntries(listEl, entries) {
 }
 
 /**
+ * /api/connections/sources のエントリ配列(IP・リクエスト数・最終アクセス時刻)を
+ * <ul> 要素へ描画する。renderLogEntries() とは列の形が異なる(severity/category/
+ * messageではなくip/requestCount/lastSeenAt)ため、専用のレンダラとする。
+ * @param {HTMLElement} listEl
+ * @param {object[]} sources
+ */
+function renderSourceIps(listEl, sources) {
+  listEl.textContent = "";
+
+  if (!Array.isArray(sources) || sources.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "log-empty";
+    empty.textContent = "記録なし";
+    listEl.appendChild(empty);
+    return;
+  }
+
+  sources.forEach((source) => {
+    const li = document.createElement("li");
+    li.className = "log-entry";
+
+    const ip = document.createElement("span");
+    ip.className = "log-message";
+    ip.textContent = source.ip || "--";
+
+    const count = document.createElement("span");
+    count.className = "log-category";
+    count.textContent = `${source.requestCount}件`;
+
+    const lastSeen = document.createElement("span");
+    lastSeen.className = "log-time";
+    lastSeen.textContent = source.lastSeenAt ? formatTime(new Date(source.lastSeenAt)) : "--";
+
+    li.appendChild(ip);
+    li.appendChild(count);
+    li.appendChild(lastSeen);
+    listEl.appendChild(li);
+  });
+}
+
+/**
  * network情報からローカルIPアドレスを抽出する。
  * server.js の /api/system は network.localIp を返す構成に対応。
  * 万一 localIp が無い場合は interfaces から探すフォールバックも用意。
@@ -228,6 +277,14 @@ function renderSystemInfo(data) {
   elements.ipAddress.textContent = extractLocalIp(data.network);
   elements.uptime.textContent = formatUptime(data.uptime);
   elements.lastUpdated.textContent = formatTime(new Date());
+
+  // Current Connections (collectors/connectionsCollector.js 経由で /api/system に
+  // 自動的に載る -- 他のCollectorと同じ「新規エンドポイント不要」パターン)
+  const connCurrent = data.connections && typeof data.connections.current === "number" ? data.connections.current : "--";
+  const connLastMinute =
+    data.connections && typeof data.connections.requestsLastMinute === "number" ? data.connections.requestsLastMinute : "--";
+  elements.connectionsCurrent.textContent = String(connCurrent);
+  elements.connectionsSub.textContent = `直近1分: ${connLastMinute} リクエスト`;
 }
 
 /**
@@ -360,6 +417,19 @@ function renderCharts(history) {
     { min: 0 }
   );
   elements.netHistoryValue.textContent = `↓ ${formatRate(latestRx)}  ↑ ${formatRate(latestTx)}`;
+
+  const connCurrentValues = history.map((h) => (h.connections ? h.connections.current : null));
+  const connLastMinuteValues = history.map((h) => (h.connections ? h.connections.requestsLastMinute : null));
+  drawLineChart(
+    elements.connectionsChart,
+    [
+      { values: connCurrentValues, color: chartColors.accent },
+      { values: connLastMinuteValues, color: chartColors.green },
+    ],
+    { min: 0 }
+  );
+  const latestConnCurrent = connCurrentValues[connCurrentValues.length - 1];
+  elements.connectionsHistoryValue.textContent = typeof latestConnCurrent === "number" ? String(latestConnCurrent) : "--";
 }
 
 /**
@@ -421,6 +491,25 @@ async function fetchEvents() {
 }
 
 /**
+ * /api/connections/sources を取得して「接続元IP一覧」カードを更新する。
+ * current/requestsLastMinute 自体は /api/system(collectors/connectionsCollector.js
+ * 経由)から renderSystemInfo() が既に反映しているため、ここではIP一覧のみを扱う。
+ */
+async function fetchConnectionSources() {
+  try {
+    const response = await fetch(`${CONNECTIONS_SOURCES_ENDPOINT}?limit=20`);
+    if (!response.ok) return;
+
+    const json = await response.json();
+    if (json.status !== "ok") return;
+
+    renderSourceIps(elements.sourceIpList, json.data);
+  } catch (error) {
+    // ネットワーク断などでも致命的ではないため無視する
+  }
+}
+
+/**
  * /api/system を取得してダッシュボードを更新する
  */
 async function fetchSystemInfo() {
@@ -455,3 +544,6 @@ setInterval(fetchHistory, REFRESH_INTERVAL_MS);
 
 fetchEvents();
 setInterval(fetchEvents, REFRESH_INTERVAL_MS);
+
+fetchConnectionSources();
+setInterval(fetchConnectionSources, REFRESH_INTERVAL_MS);
