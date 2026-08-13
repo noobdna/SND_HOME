@@ -143,15 +143,17 @@ graph LR
         B["Alert Engine"]
         C["Discord / Slack / Email / Webhook"]
         F["Cloudflare Tunnel<br/>(opt-in, config ready —<br/>live reachability<br/>verification pending)"]
+        G["Runs on Raspberry Pi<br/>(verified via npm start,<br/>no code changes needed)"]
     end
 
     subgraph Vision["🔭 Vision — not yet built"]
-        D["Raspberry Pi Agents"]
+        D["Multi-Pi Agent Reporting"]
         E["Multi-node Aggregator"]
     end
 
     A --> B --> C
     A -.-> F
+    A -.-> G
     A -.-> D --> E
 ```
 
@@ -171,7 +173,7 @@ graph LR
 - **Containerization:** Docker, single-stage build from `node:20-bookworm-slim` (not Alpine — see [`PHASE6_DOCKER_PLAN.md`](PHASE6_DOCKER_PLAN.md) for why) — optional, `npm start` remains the primary supported path
 - **Remote access:** [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) via the official `cloudflare/cloudflared` image — optional, off by default (Compose `profile: tunnel`); see [`PHASE6_CLOUDFLARE_TUNNEL_PLAN.md`](PHASE6_CLOUDFLARE_TUNNEL_PLAN.md)
 
-> **Platform note:** the disk and network collectors shell out to `df -k /` and `netstat -ib`. This has been developed and tested on macOS; `df` is portable to Linux, but `netstat -ib` uses BSD-style flags — on Linux the network throughput fields (`rxBytes`/`txBytes`) may come back `null` depending on your `netstat`/`net-tools` version. Everything else works cross-platform.
+> **Platform note:** the disk and network collectors shell out to `df -k /` and `netstat -ib`. This has been developed and tested on macOS; `df` is portable to Linux, but `netstat -ib` uses BSD-style flags — on Linux the network throughput fields (`rxBytes`/`txBytes`) may come back `null` depending on your `netstat`/`net-tools` version. Everything else works cross-platform, **including real Raspberry Pi hardware** — verified via `npm start` (no code changes) on a Raspberry Pi 3 Model B, 32-bit `armv7l`, 921MB RAM, Raspbian 12 (bookworm); see [`PHASE6_RASPBERRY_PI_PLAN.md`](PHASE6_RASPBERRY_PI_PLAN.md).
 
 ---
 
@@ -212,7 +214,7 @@ graph LR
 - [ ] **Phase 6 — Distributed & Self-Hosted Platform** 📋 *Planned*
   - [x] Docker support — **fully verified**, all three networking modes measured against real hardware, none left as reasoned-but-untested. `Dockerfile`/`docker-compose.yml`/`.dockerignore` per [`PHASE6_DOCKER_PLAN.md`](PHASE6_DOCKER_PLAN.md); `npm test` unaffected (356/356). `docker build` and container startup/healthcheck confirmed working on both macOS (via Colima) and genuine Linux. Networking mode verification (see the [Docker section](#-docker) above for full measured numbers): `network_mode: host` (the compose file's default) — **falsified on macOS/Colima** (scoped to the VM's own subnet, container not even reachable from the Mac's own `localhost`) but **confirmed full real-LAN parity on genuine Linux** (2026-08-12, Linux Mint 22, `masa@192.168.1.44` — `docker exec ... arp -an` matched the bare host's `arp -an` exactly); default bridge mode — confirmed non-functional for LAN Device Monitoring on Linux, though via a loud `MAX_HOSTS` safety-cap error rather than the originally-predicted silent zero-devices result, with system monitoring/alerting/reachability unaffected; `macvlan` (opt-in, not shipped in `docker-compose.yml`) — confirmed full real-LAN identity/data on Linux, with a documented caveat that the Docker host itself can't reach the container over the macvlan's own parent interface (a kernel restriction), though it can via any other NIC on the same subnet
   - [x] Cloudflare Tunnel integration — **config + docs complete, live reachability verification pending a real Cloudflare account.** Optional `cloudflared` sidecar in `docker-compose.yml`, gated behind a Compose `profile: tunnel` (a plain `docker compose up` never starts it); `CLOUDFLARE_TUNNEL_TOKEN` added to `.env.example`; see the [Cloudflare Tunnel section](#-cloudflare-tunnel) above and [`PHASE6_CLOUDFLARE_TUNNEL_PLAN.md`](PHASE6_CLOUDFLARE_TUNNEL_PLAN.md) for the full design, including the deliberate decision to leave `middleware/auth.js`'s existing scoping unchanged and instead recommend Cloudflare Access as the real access-control layer. `npm test` unaffected (no application code touched — `cloudflared` is an external process, not app-aware). What's *not* verified: actually creating a tunnel, connecting a real hostname, and confirming public reachability — needs a real Cloudflare account/domain, not available in this session, the same category of gap as the Discord/Slack line below
-  - [ ] Raspberry Pi agent
+  - [x] Raspberry Pi agent — **verified on real hardware, deliberately narrow scope.** No new "agent-only" code — confirmed instead that the existing, unmodified app runs correctly via `npm start` on a real Raspberry Pi 3 Model B (armv7l/32-bit, 921MB RAM, Raspbian 12/bookworm): `node`/`npm` installed via `apt` (`v18.20.4`/`9.2.0`, satisfies README's `>=18`), `npm install` + `npm start` booted cleanly, and `GET /api/health`/`/api/system`/`/api/lan/status` all returned real data — including real LAN devices on the same network already used for the Docker verification, with the `arp` binary genuinely absent on this OS image and the app's existing `ip neigh` fallback picking up the slack with zero code changes. Full account, including why the aggregator-facing "agent mode" design was deliberately deferred rather than built speculatively, in [`PHASE6_RASPBERRY_PI_PLAN.md`](PHASE6_RASPBERRY_PI_PLAN.md). Docker-on-Pi and the multi-node aggregator itself remain out of scope here — see that document
   - [ ] Multi-node monitoring
 
 ---
@@ -618,7 +620,7 @@ The collector-plugin and event-driven engine design already in place (`collector
 - **Self-hosted first** — your metrics, your box, no third-party cloud dependency.
 - **Alerting as a subscriber** — proven out in Phase 5: `AlertEngine` is just another listener on `MonitorEngine`'s `update` event, added without touching `monitorEngine.js` at all. Notifier channels follow the same pattern one level down — `notifierRegistry.dispatch()` fans out to `discordNotifier`/`slackNotifier`/`emailNotifier`/`webhookNotifier` the same way `collectorRegistry.collectAll()` fans out to the metric collectors.
 - **AI-assisted insight** — once history accumulates, anomaly detection and natural-language health summaries ("your disk usage has been trending up 3%/day") become possible on top of the existing `HistoryStore`, without changing how metrics are collected.
-- **Beyond one box** — Raspberry Pi agents and multi-node aggregation extend the same collector/engine model across a whole home network.
+- **Beyond one box** — the app itself already runs unmodified on Raspberry Pi hardware (verified, [`PHASE6_RASPBERRY_PI_PLAN.md`](PHASE6_RASPBERRY_PI_PLAN.md)); multi-node aggregation across several such boxes is the next layer, extending the same collector/engine model across a whole home network.
 
 Alerting is the first of these proven out end-to-end; AI-assisted insight and multi-node aggregation don't exist yet — they're the direction the architecture is deliberately built to support next. See [Roadmap](#️-roadmap) for the concrete, incremental path there.
 
