@@ -7,6 +7,7 @@ const HISTORY_ENDPOINT = "/api/system/history";
 const EVENTS_ENDPOINT = "/api/events";
 const AUTH_STATUS_ENDPOINT = "/api/auth/status";
 const CONNECTIONS_SOURCES_ENDPOINT = "/api/connections/sources";
+const PI_STATUS_ENDPOINT = "/api/pi-status";
 
 // DOM要素の参照をキャッシュ
 const elements = {
@@ -53,6 +54,11 @@ const elements = {
 
   connectionsChart: document.getElementById("connectionsChart"),
   connectionsHistoryValue: document.getElementById("connectionsHistoryValue"),
+
+  piStatusDot: document.getElementById("piStatusDot"),
+  piStatusValue: document.getElementById("piStatusValue"),
+  piIpAddress: document.getElementById("piIpAddress"),
+  piLastSeenAt: document.getElementById("piLastSeenAt"),
 };
 
 // チャートの色はCSSカスタムプロパティ(テーマ)から取得し、既存の配色と統一する
@@ -510,6 +516,50 @@ async function fetchConnectionSources() {
 }
 
 /**
+ * /api/pi-status を取得して「Raspberry Pi」カードを更新する。
+ * PI_MONITOR_MAC 未設定(configured:false)の場合は「未設定」と表示する --
+ * lan/deviceStore.js の既存スキャン結果を再利用するだけで、新規のping/SSH等の
+ * ポーリングはここでも一切行わない(OBSERVABILITY_PLAN.mdで確認済みの方針)。
+ * setServiceRow/setServiceRowError は「SNDサービス状態」カードで既に使っている
+ * dot+valueの共通ヘルパーをそのまま再利用する。
+ */
+async function fetchPiStatus() {
+  try {
+    const response = await fetch(PI_STATUS_ENDPOINT);
+    if (!response.ok) {
+      setServiceRowError(elements.piStatusDot, elements.piStatusValue);
+      elements.piIpAddress.textContent = "--";
+      elements.piLastSeenAt.textContent = "--";
+      return;
+    }
+
+    const data = await response.json();
+    if (!data.configured) {
+      elements.piStatusDot.classList.remove("online", "offline");
+      elements.piStatusValue.textContent = "未設定";
+      elements.piIpAddress.textContent = "--";
+      elements.piLastSeenAt.textContent = "--";
+      return;
+    }
+
+    if (!data.found) {
+      elements.piStatusDot.classList.remove("online");
+      elements.piStatusDot.classList.add("offline");
+      elements.piStatusValue.textContent = "未検出";
+      elements.piIpAddress.textContent = "--";
+      elements.piLastSeenAt.textContent = "--";
+      return;
+    }
+
+    setServiceRow(elements.piStatusDot, elements.piStatusValue, Boolean(data.online), "オンライン");
+    elements.piIpAddress.textContent = data.ip || "--";
+    elements.piLastSeenAt.textContent = data.lastSeenAt ? formatTime(new Date(data.lastSeenAt)) : "--";
+  } catch (error) {
+    setServiceRowError(elements.piStatusDot, elements.piStatusValue);
+  }
+}
+
+/**
  * /api/system を取得してダッシュボードを更新する
  */
 async function fetchSystemInfo() {
@@ -547,3 +597,6 @@ setInterval(fetchEvents, REFRESH_INTERVAL_MS);
 
 fetchConnectionSources();
 setInterval(fetchConnectionSources, REFRESH_INTERVAL_MS);
+
+fetchPiStatus();
+setInterval(fetchPiStatus, REFRESH_INTERVAL_MS);
