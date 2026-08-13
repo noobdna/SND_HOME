@@ -247,7 +247,7 @@ No `.env` file is required to run the app; every variable has a sensible default
 |---|---|---|
 | `PORT` | `3000` | Port the Express server listens on |
 | `API_KEY` | *(none)* | Opt-in: set to require `Authorization: Bearer <API_KEY>` on the mutating `/api/alerts` and `/api/notifiers` endpoints (`middleware/auth.js`). Unset means those endpoints stay unauthenticated, as before |
-| `ALERTS_ENABLED` | `true` | Documented master switch for the alert engine — **not yet wired to any runtime check** (known gap, see [`PHASE5_PLAN.md`](PHASE5_PLAN.md)); the alert engine currently always runs once started |
+| `ALERTS_ENABLED` | `true` | Master switch for the alert engine. Defaults to enabled (unset, or any value other than `false`, behaves like the always-on default); set to `false` to skip starting the alert engine entirely — `server.js` checks this before calling `alertEngine.start()` |
 | `ALERTS_RULES_PATH` | `./data/alertRules.json` | Where alert rule definitions are persisted (write-through JSON). On first-ever run (no file yet), seeds from `config/defaultAlertRules.json` instead |
 | `DISCORD_ENABLED` | `true` | Both this and `DISCORD_WEBHOOK_URL` are required for Discord notifications to register |
 | `DISCORD_WEBHOOK_URL` | *(none)* | Discord Incoming Webhook URL |

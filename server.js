@@ -65,7 +65,16 @@ function start(port = process.env.PORT || 3000) {
     ruleStore.loadOrSeed();
     // alertEngine は monitorEngine の 'update' イベントの購読者なので、最初のティックを
     // 取りこぼさないよう、監視(ティック)を開始する前に購読を確立しておく。
-    startAlerting();
+    // ALERTS_ENABLED は .env.example で "true" がデフォルト(オプトアウト方式)の
+    // マスタースイッチ — 未設定時は従来通り常に起動する後方互換を保ちつつ、
+    // 明示的に "false" にした場合だけ起動をスキップする(=== "true" ではなく
+    // !== "false" にしているのはそのため。notifiers/*.js の *_ENABLED は逆に
+    // オプトイン方式なので === "true" だが、ALERTS_ENABLED はここが違う)。
+    if (process.env.ALERTS_ENABLED === "false") {
+      console.log("[alertEngine] ALERTS_ENABLED=false — alert engine not started");
+    } else {
+      startAlerting();
+    }
     startMonitoring();
     // lanEngine は monitorEngine/alertEngine のどちらの購読者でもなく、完全に
     // 独立したタイマーで動く(lan/lanEngine.js冒頭コメント参照)ため、
