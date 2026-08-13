@@ -15,6 +15,9 @@ const {
   list,
   get,
   setNickname,
+  groupTerminal,
+  ungroupTerminal,
+  listTerminals,
   clear,
   load,
   persist,
@@ -82,6 +85,7 @@ describe("recordScan", () => {
     assert.equal(device.firstSeenAt, "2026-01-01T00:00:00.000Z");
     assert.equal(device.lastSeenAt, "2026-01-01T00:00:00.000Z");
     assert.equal(device.nickname, null);
+    assert.equal(device.terminalId, null);
   });
 
   it("CRITICAL: records a device that responded only via ARP (not ping) as online, with the flags reflecting exactly that", () => {
@@ -179,6 +183,125 @@ describe("setNickname", () => {
   });
 });
 
+describe("groupTerminal / ungroupTerminal", () => {
+  beforeEach(() => {
+    recordScan(
+      scanResult([
+        { ip: "192.168.1.44", mac: "60:33:4b:2d:1e:64", vendor: "Intel", online: true },
+        { ip: "192.168.1.239", mac: "d8:30:62:a5:90:25", vendor: "Realtek", online: true },
+      ]),
+    );
+  });
+
+  it("groups a device under a primary device's mac", () => {
+    const updated = groupTerminal("d8:30:62:a5:90:25", "60:33:4b:2d:1e:64");
+    assert.equal(updated.terminalId, "60:33:4b:2d:1e:64");
+    assert.equal(get("d8:30:62:a5:90:25").terminalId, "60:33:4b:2d:1e:64");
+    // primary自身のterminalIdは変わらない(グループの代表のまま)
+    assert.equal(get("60:33:4b:2d:1e:64").terminalId, null);
+  });
+
+  it("ungroupTerminal resets terminalId to null", () => {
+    groupTerminal("d8:30:62:a5:90:25", "60:33:4b:2d:1e:64");
+    const updated = ungroupTerminal("d8:30:62:a5:90:25");
+    assert.equal(updated.terminalId, null);
+    assert.equal(get("d8:30:62:a5:90:25").terminalId, null);
+  });
+
+  it("groupTerminal(mac, null) is equivalent to ungroupTerminal", () => {
+    groupTerminal("d8:30:62:a5:90:25", "60:33:4b:2d:1e:64");
+    groupTerminal("d8:30:62:a5:90:25", null);
+    assert.equal(get("d8:30:62:a5:90:25").terminalId, null);
+  });
+
+  it("rejects grouping a device with itself", () => {
+    assert.throws(() => groupTerminal("60:33:4b:2d:1e:64", "60:33:4b:2d:1e:64"), /Cannot group a device with itself/);
+  });
+
+  it("throws DeviceNotFoundError when the target mac is unknown", () => {
+    assert.throws(() => groupTerminal("00:00:00:00:00:00", "60:33:4b:2d:1e:64"), DeviceNotFoundError);
+  });
+
+  it("throws DeviceNotFoundError when primaryMac is unknown", () => {
+    assert.throws(() => groupTerminal("d8:30:62:a5:90:25", "00:00:00:00:00:00"), DeviceNotFoundError);
+  });
+
+  it("throws DeviceNotFoundError from ungroupTerminal when the mac is unknown", () => {
+    assert.throws(() => ungroupTerminal("00:00:00:00:00:00"), DeviceNotFoundError);
+  });
+});
+
+describe("listTerminals", () => {
+  it("returns an empty array on a fresh store", () => {
+    assert.deepEqual(listTerminals(), []);
+  });
+
+  it("an ungrouped device is its own terminal (effective terminalId = its own mac)", () => {
+    recordScan(scanResult([{ ip: "192.168.1.1", mac: "aa:bb:cc:dd:ee:ff", vendor: "NETGEAR", online: true }]));
+    const terminals = listTerminals();
+    assert.equal(terminals.length, 1);
+    assert.deepEqual(terminals[0], {
+      terminalId: "aa:bb:cc:dd:ee:ff",
+      displayIp: "192.168.1.1",
+      online: true,
+      macs: ["aa:bb:cc:dd:ee:ff"],
+      nickname: null,
+      firstSeenAt: "2026-01-01T00:00:00.000Z",
+      lastSeenAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("REAL CASE (this session's own dual-NIC host): grouped interfaces collapse into a single terminal, while GET-by-mac (list/get) is unaffected", () => {
+    recordScan(
+      scanResult(
+        [
+          { ip: "192.168.1.44", mac: "60:33:4b:2d:1e:64", vendor: "Intel", online: true },
+          { ip: "192.168.1.239", mac: "d8:30:62:a5:90:25", vendor: "Realtek", online: false },
+        ],
+        "2026-01-01T00:00:00.000Z",
+      ),
+    );
+    // 有線側の方が新しく見えているケース(Wi-Fiが先にオフラインになった、等)をシミュレート
+    recordScan(
+      scanResult([{ ip: "192.168.1.239", mac: "d8:30:62:a5:90:25", vendor: "Realtek", online: true }], "2026-01-01T00:05:00.000Z"),
+    );
+    setNickname("60:33:4b:2d:1e:64", "Living Room PC");
+    groupTerminal("d8:30:62:a5:90:25", "60:33:4b:2d:1e:64");
+
+    const terminals = listTerminals();
+    assert.equal(terminals.length, 1);
+    assert.deepEqual(terminals[0], {
+      terminalId: "60:33:4b:2d:1e:64",
+      displayIp: "192.168.1.239", // 最も lastSeenAt が新しいインターフェース(有線側)のIP
+      online: true, // どちらかがオンラインならtrue
+      macs: ["60:33:4b:2d:1e:64", "d8:30:62:a5:90:25"],
+      nickname: "Living Room PC", // primary(=terminalIdと同じmacを持つデバイス)のニックネーム
+      firstSeenAt: "2026-01-01T00:00:00.000Z",
+      lastSeenAt: "2026-01-01T00:05:00.000Z",
+    });
+
+    // 既存のMACベースAPIは一切影響を受けない(list/getは引き続き2台のまま)
+    assert.equal(list().length, 2);
+    assert.equal(get("d8:30:62:a5:90:25").terminalId, "60:33:4b:2d:1e:64");
+  });
+
+  it("ungrouped and grouped devices coexist as separate terminal entries", () => {
+    recordScan(
+      scanResult([
+        { ip: "192.168.1.44", mac: "60:33:4b:2d:1e:64", online: true },
+        { ip: "192.168.1.239", mac: "d8:30:62:a5:90:25", online: true },
+        { ip: "192.168.1.50", mac: "aa:bb:cc:dd:ee:ff", online: true },
+      ]),
+    );
+    groupTerminal("d8:30:62:a5:90:25", "60:33:4b:2d:1e:64");
+
+    const terminals = listTerminals();
+    assert.equal(terminals.length, 2);
+    const ids = terminals.map((t) => t.terminalId).sort();
+    assert.deepEqual(ids, ["60:33:4b:2d:1e:64", "aa:bb:cc:dd:ee:ff"]);
+  });
+});
+
 describe("persistence (load/persist, temp paths only)", () => {
   it("getDevicesPath() honors LAN_DEVICES_PATH", () => {
     assert.equal(getDevicesPath(), process.env.LAN_DEVICES_PATH);
@@ -205,6 +328,22 @@ describe("persistence (load/persist, temp paths only)", () => {
     assert.equal(device.online, false);
     assert.equal(device.respondedToPing, false);
     assert.equal(device.inArpTable, false);
+  });
+
+  it("persists terminalId after groupTerminal and reloads it identically via load()", () => {
+    recordScan(
+      scanResult([
+        { ip: "192.168.1.44", mac: "60:33:4b:2d:1e:64", online: true },
+        { ip: "192.168.1.239", mac: "d8:30:62:a5:90:25", online: true },
+      ]),
+    );
+    groupTerminal("d8:30:62:a5:90:25", "60:33:4b:2d:1e:64");
+
+    clear();
+    const result = load();
+    assert.deepEqual(result, { loaded: 2, skipped: 0 });
+    assert.equal(get("d8:30:62:a5:90:25").terminalId, "60:33:4b:2d:1e:64");
+    assert.equal(get("60:33:4b:2d:1e:64").terminalId, null);
   });
 
   it("load() on a nonexistent file is a no-op, not an error", () => {

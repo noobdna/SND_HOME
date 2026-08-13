@@ -11,6 +11,9 @@
 // (エクスポートされたクラスを直接インスタンス化)。
 const { describe, it, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
 const lanScanner = require("./lanScanner");
 const deviceStore = require("./deviceStore");
@@ -240,6 +243,7 @@ describe("LanEngine (fresh instance per test)", () => {
         lastError: null,
         uptime: 0,
         knownDeviceCount: deviceStore.list().length,
+        knownTerminalCount: deviceStore.listTerminals().length,
         onlineCount: 0,
         unresolvedMacCount: 0,
       });
@@ -262,6 +266,42 @@ describe("LanEngine (fresh instance per test)", () => {
       assert.ok(typeof status.lastUpdated === "string");
       assert.ok(status.uptime >= 0);
       engine.stop();
+    });
+
+    it("CRITICAL: knownTerminalCount reflects deviceStore.listTerminals() (equal to knownDeviceCount until grouping is used, additive-only field)", async () => {
+      lanScanner.scan = async () =>
+        fakeScanResult({
+          devices: [
+            { ip: "192.168.1.44", mac: "60:33:4b:2d:1e:64", vendor: null, respondedToPing: true, inArpTable: true, online: true },
+            { ip: "192.168.1.239", mac: "d8:30:62:a5:90:25", vendor: null, respondedToPing: true, inArpTable: true, online: true },
+          ],
+        });
+      // このテストは実際の deviceStore.recordScan/groupTerminal を使う(他のテストのように
+      // モンキーパッチしない)— knownDeviceCount/knownTerminalCount の乖離を検証するには
+      // 実データの台帳状態が必要なため。実際のdata/lanDevices.jsonには一切触れないよう、
+      // deviceStore.test.js と同じ隔離規約(LAN_DEVICES_PATHをテンポラリパスへ差し替え)を適用する。
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lanengine-test-"));
+      const originalPath = process.env.LAN_DEVICES_PATH;
+      process.env.LAN_DEVICES_PATH = path.join(tmpDir, "devices.json");
+      deviceStore.clear();
+
+      const engine = new LanEngine();
+      try {
+        engine.start(999_999);
+        await wait();
+
+        assert.equal(engine.getStatus().knownDeviceCount, 2);
+        assert.equal(engine.getStatus().knownTerminalCount, 2); // 未グルーピングなので device数と一致
+
+        deviceStore.groupTerminal("d8:30:62:a5:90:25", "60:33:4b:2d:1e:64");
+        assert.equal(engine.getStatus().knownDeviceCount, 2); // 既存フィールドは変化しない
+        assert.equal(engine.getStatus().knownTerminalCount, 1); // 1物理端末に集約される
+      } finally {
+        engine.stop();
+        deviceStore.clear();
+        if (originalPath === undefined) delete process.env.LAN_DEVICES_PATH;
+        else process.env.LAN_DEVICES_PATH = originalPath;
+      }
     });
 
     it("reports lastError after a failed tick, without clearing lastUpdated from an earlier success", async () => {

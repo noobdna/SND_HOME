@@ -51,7 +51,7 @@ It's built as a **plugin-based architecture** from day one — new metrics are `
 | 📧 **Email Notifications** | SMTP delivery via `nodemailer`, configurable host/port/auth |
 | 🪝 **Generic Webhook Notifications** | Raw JSON POST to any endpoint, optionally HMAC-SHA256 signed (`X-SND-Signature`) for PagerDuty/Opsgenie/custom receivers |
 | 🔌 **Notifier Plugin Registry** | Same `register()`-based plugin pattern as collectors — one file per channel, isolated failures via `Promise.allSettled` |
-| 📶 **LAN Device Monitoring** | Passive network sweep (ping + ARP/`ip neigh`, no port scanning) on its own 2-minute timer, with vendor lookup via a static OUI table and a persisted device ledger (first/last seen, online status, optional nickname) |
+| 📶 **LAN Device Monitoring** | Passive network sweep (ping + ARP/`ip neigh`, no port scanning) on its own 2-minute timer, with vendor lookup via a static OUI table and a persisted device ledger (first/last seen, online status, optional nickname), plus optional manual [terminal aggregation](#terminal-aggregation) for multi-interface hosts (see [`LAN_TERMINAL_AGGREGATION_PLAN.md`](LAN_TERMINAL_AGGREGATION_PLAN.md)) |
 
 ### Upcoming (roadmap)
 
@@ -375,8 +375,9 @@ All endpoints are served from the running Express app; only endpoints that exist
 | `POST` | `/api/notifiers/:name/test` | Send a `[TEST]` message through one specific notifier channel |
 | `GET` | `/api/lan/devices` | List every known device in the LAN ledger (online and offline) |
 | `GET` | `/api/lan/devices/:mac` | Get a single device by MAC address |
-| `PATCH` | `/api/lan/devices/:mac` | Set or clear (`nickname: null`) a device's display nickname |
-| `GET` | `/api/lan/status` | LAN scan engine status (running, scan interval, known/online device counts, last scan time) |
+| `PATCH` | `/api/lan/devices/:mac` | Set or clear (`nickname: null`) a device's display nickname, and/or set or clear (`terminalId: null`) its terminal grouping — either field, or both, may be included in one request |
+| `GET` | `/api/lan/terminals` | List the device ledger aggregated into physical **terminals** (see [Terminal Aggregation](#terminal-aggregation) below) rather than one row per MAC |
+| `GET` | `/api/lan/status` | LAN scan engine status (running, scan interval, known device/terminal/online counts, last scan time) |
 
 > 🔒 **Authentication is opt-in.** The mutating alert/notifier endpoints (`POST`/`PUT`/`DELETE`) are unauthenticated by default — fine for a single-user homelab on a trusted network. Set `API_KEY` in `.env` to require `Authorization: Bearer <API_KEY>` on those endpoints (`middleware/auth.js`); leave it unset to keep the previous, no-auth behavior. Recommended before exposing this server beyond localhost/your own LAN. Read-only `GET` endpoints are never gated — **except `/api/lan/*`, which is gated as a whole (including its `GET` routes)** when `API_KEY` is set: a list of devices on your network is more sensitive than a CPU percentage, so every route under `/api/lan` is protected together rather than only its mutating ones. See [`PHASE5_PLAN.md`](PHASE5_PLAN.md) for the history of this decision.
 
@@ -518,6 +519,7 @@ All endpoints are served from the running Express app; only endpoints that exist
       "ip": "192.168.1.1",
       "vendor": "NETGEAR",
       "nickname": "Living Room Router",
+      "terminalId": null,
       "online": true,
       "respondedToPing": true,
       "inArpTable": true,
@@ -540,6 +542,7 @@ All endpoints are served from the running Express app; only endpoints that exist
   "lastError": null,
   "uptime": 3612,
   "knownDeviceCount": 14,
+  "knownTerminalCount": 13,
   "onlineCount": 11,
   "unresolvedMacCount": 2
 }
@@ -547,10 +550,57 @@ All endpoints are served from the running Express app; only endpoints that exist
 
 `unresolvedMacCount` is how many devices this scan found (via ping and/or ARP) but couldn't resolve a MAC address for — they count toward `onlineCount` but not `knownDeviceCount`, since `lan/deviceStore.js` deliberately doesn't ledger a device with no stable identifier to key it by (see that file's header comment). If this is consistently non-zero (not just an occasional device that genuinely blocks ARP), also check `LAN_SCAN_CIDR` above.
 
+`knownTerminalCount` is `knownDeviceCount` collapsed via terminal grouping (see below) — identical to `knownDeviceCount` until you actually group something, since an ungrouped device counts as its own one-device terminal.
+
 > 🔧 **Fixed root cause of under-detection:** `lan/lanScanner.js` used to call plain `arp -a`, which tries to resolve every IP to a hostname via reverse DNS. On a real machine tested against, with no reachable reverse-DNS resolver for private addresses, that single call took **13 seconds** — far past `DEFAULT_ARP_TIMEOUT_MS` (2s) — so it was killed by the timeout on every scan and `readArpTable()` always fell back to an empty map, silently leaving every online device's MAC unresolved (`unresolvedMacCount` equal to `onlineCount`, `knownDeviceCount` stuck at 0). Now calls `arp -an` (numeric, no hostname resolution) instead — same call took **14ms** and returned correct data. If you're on an older version and see `onlineCount` far above `knownDeviceCount`, this is almost certainly why.
 </details>
 
-> 🧭 **Feeds into the Alert Engine, too.** `collectors/lanCollector.js` registers into the same `collectorRegistry` as CPU/memory/disk/network, exposing each known device on `/api/system` as `lan.devices.<mac_with_underscores_instead_of_colons>.online` (`0`/`1`). That means a per-device "went offline" alert rule (e.g. `{ "metric": "lan.devices.aa_bb_cc_dd_ee_ff.online", "operator": "<", "threshold": 1 }`) works today with zero changes to `alertEngine.js`/`ruleEvaluator.js` — it's the same dot-path `resolveMetric()` mechanism every other metric alert already uses.
+> 🧭 **Feeds into the Alert Engine, too.** `collectors/lanCollector.js` registers into the same `collectorRegistry` as CPU/memory/disk/network, exposing each known device on `/api/system` as `lan.devices.<mac_with_underscores_instead_of_colons>.online` (`0`/`1`). That means a per-device "went offline" alert rule (e.g. `{ "metric": "lan.devices.aa_bb_cc_dd_ee_ff.online", "operator": "<", "threshold": 1 }`) works today with zero changes to `alertEngine.js`/`ruleEvaluator.js` — it's the same dot-path `resolveMetric()` mechanism every other metric alert already uses. This dot-path is still per-MAC, unchanged by terminal aggregation below.
+
+### Terminal Aggregation
+
+The device ledger keys every entry by MAC address, so a single physical machine with two active interfaces at once (Wi-Fi *and* Ethernet, say) shows up as **two** ledger entries even though it's one "terminal" (端末). `GET /api/lan/devices` and `GET /api/lan/devices/:mac` stay exactly as they've always been — this is an additive, opt-in layer on top, not a replacement.
+
+If you want the two entries counted and viewed as one terminal, group them manually — there's no automatic/heuristic correlation (no IP co-location guessing, no vendor/OUI matching). This project consistently avoids that kind of correlation elsewhere (see `lan/deviceStore.js`'s own MAC-exclusion design and `unresolvedMacCount` above) because a wrong automatic guess would silently merge two real devices into one, hiding one of them from monitoring. A home LAN realistically has one or two dual-interface hosts, so manual grouping isn't a meaningful burden, and it carries zero false-positive risk.
+
+```bash
+# Group the Ethernet interface (d8:30:...) under the Wi-Fi interface (60:33:...) as the primary
+curl -X PATCH http://localhost:3000/api/lan/devices/d8:30:62:a5:90:25 \
+  -H "Content-Type: application/json" \
+  -d '{"terminalId": "60:33:4b:2d:1e:64"}'
+
+# Undo it
+curl -X PATCH http://localhost:3000/api/lan/devices/d8:30:62:a5:90:25 \
+  -H "Content-Type: application/json" \
+  -d '{"terminalId": null}'
+```
+
+<details>
+<summary><code>GET /api/lan/terminals</code> — example response</summary>
+
+```json
+{
+  "status": "ok",
+  "data": [
+    {
+      "terminalId": "60:33:4b:2d:1e:64",
+      "displayIp": "192.168.1.239",
+      "online": true,
+      "macs": ["60:33:4b:2d:1e:64", "d8:30:62:a5:90:25"],
+      "nickname": "Living Room PC",
+      "firstSeenAt": "2026-08-10T09:00:00.000Z",
+      "lastSeenAt": "2026-08-11T13:02:00.000Z"
+    }
+  ]
+}
+```
+</details>
+
+- `terminalId` is just the primary interface's own MAC — no separate ID scheme.
+- `displayIp` is the IP of whichever grouped interface has the most recent `lastSeenAt` (IPs aren't stable identifiers, but this is the most relevant one to *show* right now).
+- `online` is true if *any* grouped interface is online.
+- `nickname` comes from the primary interface (the one whose own `mac` equals `terminalId`).
+- An ungrouped device appears as its own one-MAC terminal, so `GET /api/lan/terminals` and `GET /api/lan/devices` return the same count until you group something.
 
 ---
 
@@ -591,7 +641,7 @@ SND_HOME/
 │   ├── monitor.js                # /api/monitor/status
 │   ├── alerts.js                 # /api/alerts/* (rules CRUD, active, history, test, status)
 │   ├── notifiers.js              # /api/notifiers/*
-│   └── lan.js                    # /api/lan/* (device ledger, nicknames, scan status) — entire router requires auth when set
+│   └── lan.js                    # /api/lan/* (device ledger, nicknames, terminal grouping, scan status) — entire router requires auth when set
 ├── config/
 │   ├── defaultAlertRules.json    # Seed rules loaded on first-ever run
 │   └── ouiPrefixes.json          # Static MAC-prefix -> vendor name table used by lan/ouiLookup.js
