@@ -7,6 +7,7 @@ const alertsRoutes = require("./routes/alerts");
 const notifiersRoutes = require("./routes/notifiers");
 const lanRoutes = require("./routes/lan");
 const eventsRoutes = require("./routes/events");
+const authRoutes = require("./routes/auth");
 const { startMonitoring, stopMonitoring } = require("./monitor/monitorEngine");
 const { start: startAlerting, stop: stopAlerting } = require("./alerts/alertEngine");
 const { startLanScanning, stopLanScanning } = require("./lan/lanEngine");
@@ -31,6 +32,7 @@ app.use("/api/alerts", alertsRoutes);
 app.use("/api/notifiers", notifiersRoutes);
 app.use("/api/lan", lanRoutes);
 app.use("/api/events", eventsRoutes);
+app.use("/api/auth", authRoutes);
 
 // ---------------------------------------------------------
 // サーバー起動

@@ -5,6 +5,7 @@ const REFRESH_INTERVAL_MS = 3000;
 const API_ENDPOINT = "/api/system";
 const HISTORY_ENDPOINT = "/api/system/history";
 const EVENTS_ENDPOINT = "/api/events";
+const AUTH_STATUS_ENDPOINT = "/api/auth/status";
 
 // DOM要素の参照をキャッシュ
 const elements = {
@@ -41,6 +42,9 @@ const elements = {
   errorsCount: document.getElementById("errorsCount"),
   errorsList: document.getElementById("errorsList"),
   eventLogList: document.getElementById("eventLogList"),
+
+  authEnforcedValue: document.getElementById("authEnforcedValue"),
+  authEventsList: document.getElementById("authEventsList"),
 };
 
 // チャートの色はCSSカスタムプロパティ(テーマ)から取得し、既存の配色と統一する
@@ -377,18 +381,24 @@ async function fetchHistory() {
 }
 
 /**
- * /api/events を2通りの絞り込みで取得し、「エラー/警告」カードと
- * 「イベントログ」パネルの両方を更新する。severity=warning,error の絞り込みが
- * 「エラー/警告」表示そのもの(専用の /api/errors は存在しない、
- * OBSERVABILITY_PLAN.md参照)。取得失敗時は他の致命的でない取得と同様、
- * 既存表示を維持して黙って諦める。
+ * /api/events を複数の絞り込みで取得し、「エラー/警告」「認証イベント」
+ * 「イベントログ」の3枠を更新する。severity=warning,error の絞り込みが
+ * 「エラー/警告」表示そのもの、category=auth の絞り込みが「認証イベント」
+ * 表示そのもの(専用の /api/errors・/api/auth/events は存在しない、
+ * OBSERVABILITY_PLAN.md参照)。/api/auth/status の enforced は、API_KEY未設定時
+ * (チェック自体が発生しない)にイベントを記録しない代わりに見せる静的フィールド。
+ * 取得失敗時は他の致命的でない取得と同様、既存表示を維持して黙って諦める。
  */
 async function fetchEvents() {
-  const [errorsResult, allResult] = await Promise.allSettled([
+  const [errorsResult, allResult, authEventsResult, authStatusResult] = await Promise.allSettled([
     fetch(`${EVENTS_ENDPOINT}?severity=warning,error&limit=10`).then((r) =>
       r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))
     ),
     fetch(`${EVENTS_ENDPOINT}?limit=50`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+    fetch(`${EVENTS_ENDPOINT}?category=auth&limit=10`).then((r) =>
+      r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))
+    ),
+    fetch(AUTH_STATUS_ENDPOINT).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
   ]);
 
   if (errorsResult.status === "fulfilled" && errorsResult.value.status === "ok") {
@@ -399,6 +409,14 @@ async function fetchEvents() {
 
   if (allResult.status === "fulfilled" && allResult.value.status === "ok") {
     renderLogEntries(elements.eventLogList, allResult.value.data);
+  }
+
+  if (authEventsResult.status === "fulfilled" && authEventsResult.value.status === "ok") {
+    renderLogEntries(elements.authEventsList, authEventsResult.value.data);
+  }
+
+  if (authStatusResult.status === "fulfilled") {
+    elements.authEnforcedValue.textContent = authStatusResult.value.enforced ? "有効" : "無効";
   }
 }
 
