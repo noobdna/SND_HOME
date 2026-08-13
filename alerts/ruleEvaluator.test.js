@@ -329,17 +329,18 @@ describe("evaluate() — edge cases (Task 2.9)", () => {
       assert.equal(notify, true);
     });
 
-    it("known gap: a '!=' operator rule treats a missing metric as a BREACH, not a non-breach", () => {
-      // undefined !== threshold is always true in JS, so compare()'s null-safety
-      // guarantee ("never causes an incorrect firing") does not hold for "!=" rules.
-      // This is pre-existing behavior from Task 2.3, not introduced here — pinned
-      // down as a known gap rather than silently treated as correct. Flagged to the
-      // user; not fixed under this task's scope (tests only).
+    it("REGRESSION (formerly a known gap): a '!=' operator rule treats a missing metric as a non-breach, matching every other operator", () => {
+      // undefined !== threshold is always true in JS, so compare() used to breach
+      // on missing data for "!=" rules specifically -- the one operator where its
+      // null-safety guarantee ("never causes an incorrect firing") didn't hold.
+      // Fixed by an explicit `value === undefined` guard at the top of compare(),
+      // making every operator (not just >/>=/</<=/==) treat a missing metric as
+      // non-breaching. See compare()'s own JSDoc for the full history.
       const neqRule = { ...rule, operator: "!=" };
       const { nextState, notify } = evaluate(neqRule, undefined, createInitialState(), T0);
       assert.equal(nextState.state, STATES.OK);
-      assert.equal(nextState.breachSince, T0); // treated as breaching, contrary to intent
-      assert.equal(notify, false); // duration hasn't elapsed yet, but the timer did start
+      assert.equal(nextState.breachSince, null); // no longer treated as breaching
+      assert.equal(notify, false);
     });
   });
 

@@ -61,9 +61,17 @@ function resolveMetric(snapshot, metricPath) {
  * value と threshold を operator で比較する。
  * "==" / "!=" は厳密等価(===/!==)で判定する — メトリクス値は数値である前提のため、
  * 型強制による意図しない一致(例: "90" == 90)を避ける。
- * value が undefined/NaN の場合(未検出メトリクス)の扱いは呼び出し元の責務
- * (「データなし」としてそのティックの評価自体をスキップする — resolveMetric の
- * JSDoc、および PHASE5_PLAN.md の Threshold Rules 「metric」欄を参照)。
+ *
+ * value が undefined(未検出メトリクス)の場合は operator に関わらず常に false
+ * (非ブリーチ)を返す — 呼び出し元(alertEngine.handleUpdate())が「データなし」
+ * としてそのティックの評価自体をスキップする設計(resolveMetric の JSDoc、
+ * PHASE5_PLAN.md の Threshold Rules「metric」欄)への最後の砦として、この関数
+ * 自体もその不変条件を保証する。この明示チェックが無くても ">"/">="/"<"/"<="/"=="
+ * は元々 undefined を非ブリーチとして扱っていた(NaNとの比較・厳密不等価の帰結)
+ * が、"!=" だけは `undefined !== threshold` が常に true になるため唯一の例外
+ * だった — PHASE5_PLAN.md Task 2.9 で「known gap」としてテストに明記・ユーザーへ
+ * 報告した上で、当時は tests-only スコープのため未修正のまま残されていた
+ * (fix自体はこの1行)。
  * @param {number} value
  * @param {">"|">="|"<"|"<="|"=="|"!="} operator
  * @param {number} threshold
@@ -72,6 +80,10 @@ function resolveMetric(snapshot, metricPath) {
  *   ALLOWED_OPERATORS で弾いているため、通常到達しない)
  */
 function compare(value, operator, threshold) {
+  if (value === undefined) {
+    return false;
+  }
+
   switch (operator) {
     case ">":
       return value > threshold;
