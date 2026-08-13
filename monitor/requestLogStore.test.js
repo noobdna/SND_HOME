@@ -4,8 +4,16 @@
 // 小さい maxEntries で境界条件(リングバッファの追い出し)を検証する。
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
-const { RequestLogStore, record, getHistory, getRequestsSince, getMaxEntries } = require("./requestLogStore");
+const { RequestLogStore, record, getHistory, getRequestsSince, getMaxEntries, getRequestLogPath } = require("./requestLogStore");
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "requestlogstore-test-"));
+function tmpFile() {
+  return path.join(tmpDir, `requestlog-${Math.random().toString(36).slice(2)}.json`);
+}
 
 function entry(overrides = {}) {
   return {
@@ -160,5 +168,55 @@ describe("module-level singleton wiring (record/getHistory/getRequestsSince/getM
 
   it("getMaxEntries() reflects the shared store's default (2000)", () => {
     assert.equal(getMaxEntries(), 2000);
+  });
+});
+
+describe("persist() / load() (temp paths only)", () => {
+  it("persists entries and reloads them identically into a fresh instance", () => {
+    const store = new RequestLogStore();
+    store.record(entry({ path: "/1", timestamp: "2026-01-01T00:00:00.000Z" }));
+    store.record(entry({ path: "/2", timestamp: "2026-01-01T00:00:05.000Z" }));
+
+    const file = tmpFile();
+    store.persist(file);
+
+    const reloaded = new RequestLogStore();
+    const result = reloaded.load(file);
+
+    assert.deepEqual(result, { loaded: 2 });
+    assert.deepEqual(reloaded.getHistory(), store.getHistory());
+  });
+
+  it("load() on a nonexistent file leaves entries empty, not an error", () => {
+    const store = new RequestLogStore();
+    const result = store.load(tmpFile());
+    assert.deepEqual(result, { loaded: 0 });
+    assert.deepEqual(store.getHistory(), []);
+  });
+
+  it("load() truncates to the most recent maxEntries entries if the file has more", () => {
+    const file = tmpFile();
+    const many = Array.from({ length: 5 }, (_, i) => entry({ path: `/${i}` }));
+    fs.writeFileSync(file, JSON.stringify(many));
+
+    const store = new RequestLogStore(3);
+    const result = store.load(file);
+
+    assert.deepEqual(result, { loaded: 3 });
+    assert.deepEqual(
+      store.getHistory().map((e) => e.path),
+      ["/2", "/3", "/4"],
+    );
+  });
+
+  it("getRequestLogPath() honors REQUEST_LOG_PATH", () => {
+    const original = process.env.REQUEST_LOG_PATH;
+    process.env.REQUEST_LOG_PATH = "/tmp/custom-request-log.json";
+    try {
+      assert.equal(getRequestLogPath(), "/tmp/custom-request-log.json");
+    } finally {
+      if (original === undefined) delete process.env.REQUEST_LOG_PATH;
+      else process.env.REQUEST_LOG_PATH = original;
+    }
   });
 });

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Optional macOS launchd template for keeping `node server.js` running across
+  a logout/reboot -- NOT installed automatically by anything in this repo.
+  The Node process itself (monitorEngine/alertEngine/lanEngine) already keeps
+  running independently of any browser tab; what it does NOT survive on its
+  own is the Terminal/session that launched it closing, or the machine
+  rebooting. This template is the standard macOS way to solve that, for
+  anyone who wants it. See the "Always-on monitoring" section of README.md
+  for install/uninstall instructions -- this file is a template only, every
+  ALL-CAPS-PLACEHOLDER below must be filled in by hand before use.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sndhome.server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <!-- Replace with the absolute path to `node` (find yours with `which node`) -->
+    <string>REPLACE_WITH_ABSOLUTE_PATH_TO_NODE</string>
+    <string>server.js</string>
+  </array>
+
+  <!-- Replace with the absolute path to this repo's root (where server.js lives) -->
+  <key>WorkingDirectory</key>
+  <string>REPLACE_WITH_ABSOLUTE_PATH_TO_SND_HOME_REPO</string>
+
+  <!-- Start once when this plist is loaded (e.g. at login) -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart automatically if the process exits unexpectedly -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Where stdout/stderr go, since there's no terminal attached anymore.
+       Point these somewhere under data/ (already gitignored) or wherever you prefer. -->
+  <key>StandardOutPath</key>
+  <string>REPLACE_WITH_ABSOLUTE_PATH_TO_SND_HOME_REPO/data/launchd-stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>REPLACE_WITH_ABSOLUTE_PATH_TO_SND_HOME_REPO/data/launchd-stderr.log</string>
+</dict>
+</plist>

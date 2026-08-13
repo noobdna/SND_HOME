@@ -32,6 +32,10 @@ function tmpFile(name) {
 
 process.env.ALERTS_RULES_PATH = tmpFile("rules");
 process.env.LAN_DEVICES_PATH = tmpFile("devices");
+process.env.HISTORY_STORE_PATH = tmpFile("history");
+process.env.ALERT_HISTORY_PATH = tmpFile("alert-history");
+process.env.EVENT_LOG_PATH = tmpFile("event-log");
+process.env.REQUEST_LOG_PATH = tmpFile("request-log");
 
 const { app } = require("./server");
 
@@ -144,6 +148,10 @@ describe("real process (spawned `node server.js`)", () => {
       PORT: String(port),
       ALERTS_RULES_PATH: tmpFile("spawn-rules"),
       LAN_DEVICES_PATH: tmpFile("spawn-devices"),
+      HISTORY_STORE_PATH: tmpFile("spawn-history"),
+      ALERT_HISTORY_PATH: tmpFile("spawn-alert-history"),
+      EVENT_LOG_PATH: tmpFile("spawn-event-log"),
+      REQUEST_LOG_PATH: tmpFile("spawn-request-log"),
     };
     delete env.API_KEY;
     const child = spawnServer(env);
@@ -173,6 +181,10 @@ describe("real process (spawned `node server.js`)", () => {
       API_KEY: "test-secret",
       ALERTS_RULES_PATH: tmpFile("spawn-rules"),
       LAN_DEVICES_PATH: tmpFile("spawn-devices"),
+      HISTORY_STORE_PATH: tmpFile("spawn-history"),
+      ALERT_HISTORY_PATH: tmpFile("spawn-alert-history"),
+      EVENT_LOG_PATH: tmpFile("spawn-event-log"),
+      REQUEST_LOG_PATH: tmpFile("spawn-request-log"),
     });
     const stdout = captureStdout(child);
 
@@ -205,6 +217,10 @@ describe("real process (spawned `node server.js`)", () => {
       ALERTS_ENABLED: "false",
       ALERTS_RULES_PATH: tmpFile("spawn-rules"),
       LAN_DEVICES_PATH: tmpFile("spawn-devices"),
+      HISTORY_STORE_PATH: tmpFile("spawn-history"),
+      ALERT_HISTORY_PATH: tmpFile("spawn-alert-history"),
+      EVENT_LOG_PATH: tmpFile("spawn-event-log"),
+      REQUEST_LOG_PATH: tmpFile("spawn-request-log"),
     });
     const stdout = captureStdout(child);
 

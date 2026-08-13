@@ -639,12 +639,31 @@ async function fetchPiStatus() {
 }
 
 /**
- * /api/system を取得してダッシュボードを更新する
+ * /api/system を取得してダッシュボードを更新する。
+ *
+ * エラーを2段階に分けて扱う:
+ * 1. fetch() 自体が例外を投げるケース -- HTTPレスポンスをそもそも受け取れて
+ *    いない、ネットワークレベルの失敗(サーバーが一時的に落ちている、再起動中
+ *    等)。このとき投げられる例外はブラウザ内部の生の TypeError で、文言が
+ *    ブラウザごとに異なる(Safariでは "Load failed"、Chromeでは
+ *    "Failed to fetch" 等)。これをそのままエラーバナーに出すと、ユーザーには
+ *    意味の分からない英語の内部エラー文言が見えてしまう(実際に観測された
+ *    不具合)。ここは一貫した日本語メッセージに置き換える。
+ * 2. レスポンスは受け取れたが、HTTPステータス異常・JSONパース失敗・
+ *    アプリケーションエラーだったケース -- こちらは診断に有用な詳細メッセージ
+ *    なので、そのまま表示する(従来通り)。
  */
 async function fetchSystemInfo() {
+  let response;
   try {
-    const response = await fetch(API_ENDPOINT);
+    response = await fetch(API_ENDPOINT);
+  } catch (networkError) {
+    setOnlineStatus(false);
+    showError("サーバーに接続できません(再試行しています)");
+    return;
+  }
 
+  try {
     if (!response.ok) {
       throw new Error(`APIエラー: HTTP ${response.status}`);
     }

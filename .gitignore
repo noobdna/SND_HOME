@@ -5,3 +5,9 @@ data/alertRules.json
 data/lanDevices.json
 data/lan-status-check.log
 data/lan-status-check-cron-stderr.log
+data/metricsHistory.json
+data/alertHistory.json
+data/eventLog.json
+data/requestLog.json
+data/launchd-stdout.log
+data/launchd-stderr.log
