@@ -15,6 +15,10 @@ const { startMonitoring, stopMonitoring } = require("./monitor/monitorEngine");
 const { start: startAlerting, stop: stopAlerting } = require("./alerts/alertEngine");
 const { startLanScanning, stopLanScanning } = require("./lan/lanEngine");
 const ruleStore = require("./alerts/ruleStore");
+const historyStore = require("./monitor/historyStore");
+const alertHistoryStore = require("./alerts/alertHistoryStore");
+const eventLogStore = require("./monitor/eventLogStore");
+const requestLogStore = require("./monitor/requestLogStore");
 
 const app = express();
 
@@ -77,6 +81,19 @@ function start(port = process.env.PORT || 3000) {
     // alertEngine の購読を確立し、監視(ティック)を開始する — この順序でないと
     // 最初のティックが「ルールが1件も無い」状態で処理されてしまう。
     ruleStore.loadOrSeed();
+    // メトリクス履歴・アラート履歴・イベントログ・リクエストログの4リング
+    // バッファストアも、プロセス再起動をまたいで直近履歴が失われないよう
+    // 起動時にディスクから読み込む(常時監視化タスク — 詳細は各ストアの
+    // persist()/load() 実装コメント参照)。読み込み後、定期スナップショットの
+    // タイマーを開始する(実際の最終保存は shutdown() での明示的flushが担う)。
+    historyStore.load();
+    alertHistoryStore.load();
+    eventLogStore.load();
+    requestLogStore.load();
+    historyStore.startAutoFlush();
+    alertHistoryStore.startAutoFlush();
+    eventLogStore.startAutoFlush();
+    requestLogStore.startAutoFlush();
     // alertEngine は monitorEngine の 'update' イベントの購読者なので、最初のティックを
     // 取りこぼさないよう、監視(ティック)を開始する前に購読を確立しておく。
     // ALERTS_ENABLED は .env.example で "true" がデフォルト(オプトアウト方式)の
@@ -104,6 +121,17 @@ function start(port = process.env.PORT || 3000) {
     stopMonitoring();
     stopAlerting();
     stopLanScanning();
+    // 定期スナップショットのタイマーを止め、直前の状態を最後に一度だけ
+    // 明示的に書き込む(30秒間隔の定期スナップショットの合間に終了しても、
+    // 直近の履歴を失わないため)。
+    historyStore.stopAutoFlush();
+    alertHistoryStore.stopAutoFlush();
+    eventLogStore.stopAutoFlush();
+    requestLogStore.stopAutoFlush();
+    historyStore.persist();
+    alertHistoryStore.persist();
+    eventLogStore.persist();
+    requestLogStore.persist();
     server.close(() => {
       process.exit(0);
     });

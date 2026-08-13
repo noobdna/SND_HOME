@@ -7,8 +7,16 @@
 // lan/lanEngine.js の LanEngine エクスポートと同じ理由・同じ規約。
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
-const { HistoryStore, record, getHistory, getMaxPoints } = require("./historyStore");
+const { HistoryStore, record, getHistory, getMaxPoints, getHistoryPath } = require("./historyStore");
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "historystore-test-"));
+function tmpFile() {
+  return path.join(tmpDir, `history-${Math.random().toString(36).slice(2)}.json`);
+}
 
 function fullSnapshot(overrides = {}) {
   return {
@@ -189,5 +197,62 @@ describe("module-level singleton wiring (record/getHistory/getMaxPoints)", () =>
 
   it("getMaxPoints() reflects the shared store's default (720)", () => {
     assert.equal(getMaxPoints(), 720);
+  });
+});
+
+describe("persist() / load() (temp paths only)", () => {
+  it("persists entries and reloads them identically into a fresh instance", () => {
+    const store = new HistoryStore();
+    store.record(fullSnapshot({ timestamp: "t1" }));
+    store.record(fullSnapshot({ timestamp: "t2" }));
+
+    const file = tmpFile();
+    store.persist(file);
+
+    const reloaded = new HistoryStore();
+    const result = reloaded.load(file);
+
+    assert.deepEqual(result, { loaded: 2 });
+    assert.deepEqual(reloaded.getHistory(), store.getHistory());
+  });
+
+  it("load() on a nonexistent file leaves entries empty, not an error", () => {
+    const store = new HistoryStore();
+    const result = store.load(tmpFile());
+    assert.deepEqual(result, { loaded: 0 });
+    assert.deepEqual(store.getHistory(), []);
+  });
+
+  it("load() tolerates malformed JSON without crashing", () => {
+    const file = tmpFile();
+    fs.writeFileSync(file, "{not valid json");
+    const store = new HistoryStore();
+    assert.deepEqual(store.load(file), { loaded: 0 });
+  });
+
+  it("load() truncates to the most recent maxPoints entries if the file has more", () => {
+    const file = tmpFile();
+    const many = Array.from({ length: 5 }, (_, i) => fullSnapshot({ timestamp: `t${i}` }));
+    fs.writeFileSync(file, JSON.stringify(many));
+
+    const store = new HistoryStore(3);
+    const result = store.load(file);
+
+    assert.deepEqual(result, { loaded: 3 });
+    assert.deepEqual(
+      store.getHistory().map((e) => e.timestamp),
+      ["t2", "t3", "t4"],
+    );
+  });
+
+  it("getHistoryPath() honors HISTORY_STORE_PATH", () => {
+    const original = process.env.HISTORY_STORE_PATH;
+    process.env.HISTORY_STORE_PATH = "/tmp/custom-history.json";
+    try {
+      assert.equal(getHistoryPath(), "/tmp/custom-history.json");
+    } finally {
+      if (original === undefined) delete process.env.HISTORY_STORE_PATH;
+      else process.env.HISTORY_STORE_PATH = original;
+    }
   });
 });

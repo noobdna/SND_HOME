@@ -249,6 +249,10 @@ No `.env` file is required to run the app; every variable has a sensible default
 | `API_KEY` | *(none)* | Opt-in: set to require `Authorization: Bearer <API_KEY>` on the mutating `/api/alerts` and `/api/notifiers` endpoints (`middleware/auth.js`). Unset means those endpoints stay unauthenticated, as before |
 | `ALERTS_ENABLED` | `true` | Master switch for the alert engine. Defaults to enabled (unset, or any value other than `false`, behaves like the always-on default); set to `false` to skip starting the alert engine entirely — `server.js` checks this before calling `alertEngine.start()` |
 | `ALERTS_RULES_PATH` | `./data/alertRules.json` | Where alert rule definitions are persisted (write-through JSON). On first-ever run (no file yet), seeds from `config/defaultAlertRules.json` instead |
+| `HISTORY_STORE_PATH` | `./data/metricsHistory.json` | Where the CPU/memory/disk/network/connections trend history (`monitor/historyStore.js`) is persisted — periodic snapshot (~30s) + flush on graceful shutdown, not write-through on every 5s poll tick |
+| `ALERT_HISTORY_PATH` | `./data/alertHistory.json` | Where the alert state-transition history (`alerts/alertHistoryStore.js`) is persisted, same periodic-snapshot pattern |
+| `EVENT_LOG_PATH` | `./data/eventLog.json` | Where the event log — auth events, errors/warnings, monitor/LAN errors (`monitor/eventLogStore.js`) — is persisted, same periodic-snapshot pattern |
+| `REQUEST_LOG_PATH` | `./data/requestLog.json` | Where the raw HTTP request log backing "current connections"/"source IPs" (`monitor/requestLogStore.js`) is persisted, same periodic-snapshot pattern |
 | `DISCORD_ENABLED` | `true` | Both this and `DISCORD_WEBHOOK_URL` are required for Discord notifications to register |
 | `DISCORD_WEBHOOK_URL` | *(none)* | Discord Incoming Webhook URL |
 | `SLACK_ENABLED` | `true` | Both this and `SLACK_WEBHOOK_URL` are required for Slack notifications to register |
@@ -331,6 +335,23 @@ curl http://localhost:3000/api/system | jq
 ```
 
 Stop the server with `Ctrl+C` — it shuts down the background poller cleanly before exiting.
+
+### Always-on monitoring
+
+The dashboard is a console, not the thing doing the monitoring — closing the browser tab has never stopped anything. `monitor/monitorEngine.js` (5s poll), `alerts/alertEngine.js` (subscribes to it), and `lan/lanEngine.js` (2min LAN scan) are all independent `setInterval` loops started once by `server.js`, with zero awareness of whether a browser is connected. As long as the `node server.js` process itself is running, monitoring, alerting, and LAN scanning all continue — reopening the dashboard later just resumes reading the same live state and history.
+
+What used to *not* survive was the `node server.js` **process** itself restarting (a crash, a redeploy, or just running `npm start` again) — trend charts, alert history, the event log, and the connections/source-IP log were all pure in-memory ring buffers, wiped on every restart. They're now persisted to disk on the same write-through JSON pattern as `ALERTS_RULES_PATH`/`LAN_DEVICES_PATH` (see the env var table above), via a periodic snapshot (~30s, not on every single poll tick/request — see `monitor/ringBufferPersistence.js`) plus a final flush on graceful shutdown (`Ctrl+C`/`SIGTERM`). Restarting the server now resumes with the same recent history intact, not an empty dashboard.
+
+What still doesn't survive on its own: the **Terminal/session** that launched `node server.js` closing, or the machine rebooting — that's an OS process-lifecycle concern, not something this app's code can solve for you. If you want `node server.js` to keep running (and auto-restart) across logout/reboot on macOS, `scripts/com.sndhome.server.plist.template` is a [launchd](https://www.launchd.info/) template for that — **not installed or loaded by anything in this repo**, same "optional template, not applied automatically" stance as `docker-compose.yml`/the Cloudflare Tunnel integration:
+
+```bash
+cp scripts/com.sndhome.server.plist.template ~/Library/LaunchAgents/com.sndhome.server.plist
+# Edit the copy: replace every REPLACE_WITH_... placeholder with your actual
+# `which node` path and this repo's absolute path.
+launchctl load ~/Library/LaunchAgents/com.sndhome.server.plist
+```
+
+To stop/uninstall: `launchctl unload ~/Library/LaunchAgents/com.sndhome.server.plist && rm ~/Library/LaunchAgents/com.sndhome.server.plist`.
 
 ### Periodic LAN status check (cron)
 
@@ -617,7 +638,10 @@ SND_HOME/
 ├── monitor/
 │   ├── collectorRegistry.js      # Registers collectors, runs collectAll()
 │   ├── monitorEngine.js          # EventEmitter-based background polling loop (5s)
-│   └── historyStore.js           # In-memory ring buffer (720 points) for trend data
+│   ├── historyStore.js           # Ring buffer (720 points) for trend data — persisted to disk (HISTORY_STORE_PATH)
+│   ├── eventLogStore.js          # Ring buffer of auth/error/warning/monitor/LAN events — persisted (EVENT_LOG_PATH)
+│   ├── requestLogStore.js        # Ring buffer of raw HTTP requests (backs "connections"/"source IPs") — persisted (REQUEST_LOG_PATH)
+│   └── ringBufferPersistence.js  # Shared JSON write-through helper used by all 4 ring-buffer stores
 ├── lan/                          # LAN device discovery — independent 2-minute timer, not part of the 5s poll loop
 │   ├── lanScanner.js             # Subnet detection, ping sweep, arp/ip-neigh MAC lookup, OUI vendor resolution
 │   ├── lanEngine.js              # EventEmitter-based scan loop (mirrors monitorEngine.js's pattern)
@@ -627,7 +651,7 @@ SND_HOME/
 │   ├── ruleEvaluator.js          # Pure state-machine transition logic (no I/O)
 │   ├── ruleStore.js              # CRUD + JSON-file persistence for alert rules
 │   ├── alertEngine.js            # Subscribes to MonitorEngine 'update', drives evaluation
-│   ├── alertHistoryStore.js      # Ring buffer of alert state-transition events
+│   ├── alertHistoryStore.js      # Ring buffer of alert state-transition events — persisted (ALERT_HISTORY_PATH)
 │   └── notifierRegistry.js       # Notifier plugin registry (register/list/dispatch)
 ├── notifiers/                    # Notification plugins (name + configured() + notify())
 │   ├── discordNotifier.js
@@ -648,7 +672,14 @@ SND_HOME/
 ├── data/                         # Runtime-persisted state (gitignored, created at runtime)
 │   ├── .gitkeep
 │   ├── alertRules.json           # Alert rule definitions
-│   └── lanDevices.json           # Known LAN device ledger
+│   ├── lanDevices.json           # Known LAN device ledger
+│   ├── metricsHistory.json       # CPU/memory/disk/network/connections trend history (~30s snapshot)
+│   ├── alertHistory.json         # Alert state-transition history (~30s snapshot)
+│   ├── eventLog.json             # Auth/error/warning/monitor/LAN event log (~30s snapshot)
+│   └── requestLog.json           # Raw HTTP request log (~30s snapshot)
+├── scripts/
+│   ├── check-lan-status.js       # Standalone external LAN-status check, meant to run via cron (see Usage below)
+│   └── com.sndhome.server.plist.template  # Optional macOS launchd template (see "Always-on monitoring" in Usage) — not installed automatically
 ├── public/                       # Static dashboard, served by express.static
 │   ├── index.html                # Dashboard markup
 │   ├── app.js                    # Fetch loop, rendering, Canvas line charts

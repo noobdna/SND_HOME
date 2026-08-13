@@ -5,8 +5,16 @@
 // 追い出し)を検証する。
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
-const { AlertHistoryStore, record, getHistory, getMaxEntries } = require("./alertHistoryStore");
+const { AlertHistoryStore, record, getHistory, getMaxEntries, getAlertHistoryPath } = require("./alertHistoryStore");
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "alerthistorystore-test-"));
+function tmpFile() {
+  return path.join(tmpDir, `alerthistory-${Math.random().toString(36).slice(2)}.json`);
+}
 
 function sampleAlert(overrides = {}) {
   return {
@@ -159,5 +167,55 @@ describe("module-level singleton wiring (record/getHistory/getMaxEntries)", () =
 
   it("getMaxEntries() reflects the shared store's default (500)", () => {
     assert.equal(getMaxEntries(), 500);
+  });
+});
+
+describe("persist() / load() (temp paths only)", () => {
+  it("persists entries and reloads them identically into a fresh instance", () => {
+    const store = new AlertHistoryStore();
+    store.record(sampleAlert({ alertId: "a1" }));
+    store.record(sampleAlert({ alertId: "a2" }));
+
+    const file = tmpFile();
+    store.persist(file);
+
+    const reloaded = new AlertHistoryStore();
+    const result = reloaded.load(file);
+
+    assert.deepEqual(result, { loaded: 2 });
+    assert.deepEqual(reloaded.getHistory(), store.getHistory());
+  });
+
+  it("load() on a nonexistent file leaves entries empty, not an error", () => {
+    const store = new AlertHistoryStore();
+    const result = store.load(tmpFile());
+    assert.deepEqual(result, { loaded: 0 });
+    assert.deepEqual(store.getHistory(), []);
+  });
+
+  it("load() truncates to the most recent maxEntries entries if the file has more", () => {
+    const file = tmpFile();
+    const many = Array.from({ length: 5 }, (_, i) => sampleAlert({ alertId: `a${i}` }));
+    fs.writeFileSync(file, JSON.stringify(many));
+
+    const store = new AlertHistoryStore(3);
+    const result = store.load(file);
+
+    assert.deepEqual(result, { loaded: 3 });
+    assert.deepEqual(
+      store.getHistory().map((e) => e.alertId),
+      ["a2", "a3", "a4"]
+    );
+  });
+
+  it("getAlertHistoryPath() honors ALERT_HISTORY_PATH", () => {
+    const original = process.env.ALERT_HISTORY_PATH;
+    process.env.ALERT_HISTORY_PATH = "/tmp/custom-alert-history.json";
+    try {
+      assert.equal(getAlertHistoryPath(), "/tmp/custom-alert-history.json");
+    } finally {
+      if (original === undefined) delete process.env.ALERT_HISTORY_PATH;
+      else process.env.ALERT_HISTORY_PATH = original;
+    }
   });
 });

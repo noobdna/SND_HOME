@@ -4,8 +4,16 @@
 // 小さい maxEntries で境界条件(リングバッファの追い出し)を検証する。
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
-const { EventLogStore, record, getHistory, getMaxEntries } = require("./eventLogStore");
+const { EventLogStore, record, getHistory, getMaxEntries, getEventLogPath } = require("./eventLogStore");
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "eventlogstore-test-"));
+function tmpFile() {
+  return path.join(tmpDir, `eventlog-${Math.random().toString(36).slice(2)}.json`);
+}
 
 function event(overrides = {}) {
   return {
@@ -218,5 +226,55 @@ describe("module-level singleton wiring (record/getHistory/getMaxEntries)", () =
 
   it("getMaxEntries() reflects the shared store's default (500)", () => {
     assert.equal(getMaxEntries(), 500);
+  });
+});
+
+describe("persist() / load() (temp paths only)", () => {
+  it("persists entries and reloads them identically into a fresh instance", () => {
+    const store = new EventLogStore();
+    store.record(event({ message: "e1", timestamp: "2026-01-01T00:00:00.000Z" }));
+    store.record(event({ message: "e2", timestamp: "2026-01-01T00:00:05.000Z" }));
+
+    const file = tmpFile();
+    store.persist(file);
+
+    const reloaded = new EventLogStore();
+    const result = reloaded.load(file);
+
+    assert.deepEqual(result, { loaded: 2 });
+    assert.deepEqual(reloaded.getHistory(), store.getHistory());
+  });
+
+  it("load() on a nonexistent file leaves entries empty, not an error", () => {
+    const store = new EventLogStore();
+    const result = store.load(tmpFile());
+    assert.deepEqual(result, { loaded: 0 });
+    assert.deepEqual(store.getHistory(), []);
+  });
+
+  it("load() truncates to the most recent maxEntries entries if the file has more", () => {
+    const file = tmpFile();
+    const many = Array.from({ length: 5 }, (_, i) => event({ message: `e${i}` }));
+    fs.writeFileSync(file, JSON.stringify(many));
+
+    const store = new EventLogStore(3);
+    const result = store.load(file);
+
+    assert.deepEqual(result, { loaded: 3 });
+    assert.deepEqual(
+      store.getHistory().map((e) => e.message),
+      ["e2", "e3", "e4"],
+    );
+  });
+
+  it("getEventLogPath() honors EVENT_LOG_PATH", () => {
+    const original = process.env.EVENT_LOG_PATH;
+    process.env.EVENT_LOG_PATH = "/tmp/custom-event-log.json";
+    try {
+      assert.equal(getEventLogPath(), "/tmp/custom-event-log.json");
+    } finally {
+      if (original === undefined) delete process.env.EVENT_LOG_PATH;
+      else process.env.EVENT_LOG_PATH = original;
+    }
   });
 });
