@@ -230,12 +230,42 @@ function extractLocalIp(network) {
  * 使用率(%)に応じてプログレスバーの色クラスを切り替える
  */
 function applyBarColor(barElement, percent) {
+  // 要素が見つからない場合(実機で観測: ブラウザキャッシュがindex.html/app.js
+  // の不整合な組み合わせを一時的に保持していたケース)でも例外を投げず、
+  // その項目の表示だけを諦めて他のカードの更新は止めない
+  // -- バックエンド側の各Collector/ストアの「取れないデータは無理に埋めない」
+  // グレースフルデグレード方針と同じ考え方をDOM更新にも適用する。
+  if (!barElement) return;
+
   barElement.classList.remove("warning", "critical");
 
   if (percent >= 85) {
     barElement.classList.add("critical");
   } else if (percent >= 60) {
     barElement.classList.add("warning");
+  }
+}
+
+/**
+ * DOM要素へのtextContent書き込みを、要素が見つからない場合でも例外を投げずに
+ * 済むようガードする(理由は applyBarColor() の同種コメント参照)。
+ * @param {HTMLElement|null} element
+ * @param {string} text
+ */
+function setText(element, text) {
+  if (element) {
+    element.textContent = text;
+  }
+}
+
+/**
+ * プログレスバーの幅(%)を、要素が見つからない場合でも例外を投げずに設定する。
+ * @param {HTMLElement|null} element
+ * @param {number} percent
+ */
+function setBarWidth(element, percent) {
+  if (element) {
+    element.style.width = `${Math.min(percent, 100)}%`;
   }
 }
 
@@ -286,44 +316,44 @@ function renderSystemInfo(data) {
   const cpuUsage = data.cpu && typeof data.cpu.usage === "number" ? data.cpu.usage : 0;
   const cpuCores = data.cpu && data.cpu.cores ? data.cpu.cores : "--";
 
-  elements.cpuValue.textContent = `${cpuUsage.toFixed(1)}%`;
-  elements.cpuBar.style.width = `${Math.min(cpuUsage, 100)}%`;
+  setText(elements.cpuValue, `${cpuUsage.toFixed(1)}%`);
+  setBarWidth(elements.cpuBar, cpuUsage);
   applyBarColor(elements.cpuBar, cpuUsage);
-  elements.cpuCores.textContent = `コア数: ${cpuCores}`;
+  setText(elements.cpuCores, `コア数: ${cpuCores}`);
 
   // Memory
   const memPercent = data.memory && typeof data.memory.percent === "number" ? data.memory.percent : 0;
   const memUsed = data.memory ? data.memory.used : null;
   const memTotal = data.memory ? data.memory.total : null;
 
-  elements.memValue.textContent = `${memPercent.toFixed(1)}%`;
-  elements.memBar.style.width = `${Math.min(memPercent, 100)}%`;
+  setText(elements.memValue, `${memPercent.toFixed(1)}%`);
+  setBarWidth(elements.memBar, memPercent);
   applyBarColor(elements.memBar, memPercent);
-  elements.memDetail.textContent = `${formatBytes(memUsed)} / ${formatBytes(memTotal)}`;
+  setText(elements.memDetail, `${formatBytes(memUsed)} / ${formatBytes(memTotal)}`);
 
   // Disk
   const diskPercent = data.disk && typeof data.disk.percent === "number" ? data.disk.percent : 0;
   const diskUsed = data.disk ? data.disk.used : null;
   const diskTotal = data.disk ? data.disk.total : null;
 
-  elements.diskValue.textContent = `${diskPercent.toFixed(1)}%`;
-  elements.diskBar.style.width = `${Math.min(diskPercent, 100)}%`;
+  setText(elements.diskValue, `${diskPercent.toFixed(1)}%`);
+  setBarWidth(elements.diskBar, diskPercent);
   applyBarColor(elements.diskBar, diskPercent);
-  elements.diskDetail.textContent = `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`;
+  setText(elements.diskDetail, `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`);
 
   // Host Info
-  elements.hostname.textContent = data.hostname || "--";
-  elements.ipAddress.textContent = extractLocalIp(data.network);
-  elements.uptime.textContent = formatUptime(data.uptime);
-  elements.lastUpdated.textContent = formatTime(new Date());
+  setText(elements.hostname, data.hostname || "--");
+  setText(elements.ipAddress, extractLocalIp(data.network));
+  setText(elements.uptime, formatUptime(data.uptime));
+  setText(elements.lastUpdated, formatTime(new Date()));
 
   // Current Connections (collectors/connectionsCollector.js 経由で /api/system に
   // 自動的に載る -- 他のCollectorと同じ「新規エンドポイント不要」パターン)
   const connCurrent = data.connections && typeof data.connections.current === "number" ? data.connections.current : "--";
   const connLastMinute =
     data.connections && typeof data.connections.requestsLastMinute === "number" ? data.connections.requestsLastMinute : "--";
-  elements.connectionsCurrent.textContent = String(connCurrent);
-  elements.connectionsSub.textContent = `直近1分: ${connLastMinute} リクエスト`;
+  setText(elements.connectionsCurrent, String(connCurrent));
+  setText(elements.connectionsSub, `直近1分: ${connLastMinute} リクエスト`);
 }
 
 /**
