@@ -14,6 +14,7 @@ const EventEmitter = require("events");
 // このファイル内の呼び出しに反映されない)。
 const collectorRegistry = require("./collectorRegistry");
 const historyStore = require("./historyStore");
+const eventLogStore = require("./eventLogStore");
 
 const DEFAULT_INTERVAL_MS = 5000;
 
@@ -43,6 +44,7 @@ class MonitorEngine extends EventEmitter {
     } catch (error) {
       // Collectorが失敗してもプロセスは落とさず、直前のキャッシュを保持したまま次回ポーリングを継続する
       console.error("Polling error:", error.message || error);
+      eventLogStore.record({ category: "monitor", severity: "error", message: `Polling error: ${error.message || error}` });
       this.emit("error", error);
     }
   }

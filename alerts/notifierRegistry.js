@@ -30,6 +30,8 @@
 // その場でログする — 1つの通知先の障害・誤設定が他の通知を妨げない
 // (PHASE5_PLAN.md「Isolation guarantee」節)。
 
+const eventLogStore = require("../monitor/eventLogStore");
+
 const notifiers = [];
 
 /**
@@ -80,9 +82,11 @@ async function dispatch(alert) {
       try {
         await notifier.notify(alert);
       } catch (error) {
-        console.error(
-          `[notifierRegistry] "${notifier.name}" failed to notify: ${error.message || error}`
-        );
+        const message = `[notifierRegistry] "${notifier.name}" failed to notify: ${error.message || error}`;
+        console.error(message);
+        // severity: "warning" -- 1チャンネルの失敗は他の通知やアラート評価自体を
+        // 止めない(Isolation guarantee)ため、"error" ではなく "warning" とする。
+        eventLogStore.record({ category: "notifier", severity: "warning", message });
       }
     })
   );

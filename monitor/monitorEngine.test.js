@@ -17,6 +17,7 @@ const assert = require("node:assert/strict");
 
 const collectorRegistry = require("./collectorRegistry");
 const historyStore = require("./historyStore");
+const eventLogStore = require("./eventLogStore");
 const { MonitorEngine, startMonitoring, stopMonitoring, getLatestSystemInfo, getStatus } = require("./monitorEngine");
 
 const originalCollectAll = collectorRegistry.collectAll;
@@ -104,18 +105,24 @@ describe("MonitorEngine (fresh instance per test)", () => {
     await wait();
     assert.deepEqual(engine.getLatestSystemInfo(), snapshot);
 
-    // 2回目のtickで収集が失敗するよう差し替える
+    // 2回目のtickで収集が失敗するよう差し替える(このテスト固有のエラー文言 --
+    // eventLogStore は共有シングルトンでリセットできないため、message で絞り込む)
     collectorRegistry.collectAll = async () => {
-      throw new Error("df binary not found");
+      throw new Error("df binary not found (monitorEngine test)");
     };
     const errors = [];
     engine.on("error", (err) => errors.push(err));
     await engine.tick();
 
     assert.equal(errors.length, 1);
-    assert.match(errors[0].message, /df binary not found/);
+    assert.match(errors[0].message, /df binary not found \(monitorEngine test\)/);
     // 失敗しても直前のキャッシュはそのまま残る(古い値を握りつぶさない)
     assert.deepEqual(engine.getLatestSystemInfo(), snapshot);
+
+    const logged = eventLogStore.getHistory({ category: ["monitor"], severity: ["error"] });
+    const mine = logged.filter((e) => e.message.includes("df binary not found (monitorEngine test)"));
+    assert.equal(mine.length, 1);
+
     engine.stop();
   });
 

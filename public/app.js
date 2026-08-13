@@ -4,6 +4,7 @@
 const REFRESH_INTERVAL_MS = 3000;
 const API_ENDPOINT = "/api/system";
 const HISTORY_ENDPOINT = "/api/system/history";
+const EVENTS_ENDPOINT = "/api/events";
 
 // DOM要素の参照をキャッシュ
 const elements = {
@@ -36,6 +37,10 @@ const elements = {
   diskHistoryValue: document.getElementById("diskHistoryValue"),
   netChart: document.getElementById("netChart"),
   netHistoryValue: document.getElementById("netHistoryValue"),
+
+  errorsCount: document.getElementById("errorsCount"),
+  errorsList: document.getElementById("errorsList"),
+  eventLogList: document.getElementById("eventLogList"),
 };
 
 // チャートの色はCSSカスタムプロパティ(テーマ)から取得し、既存の配色と統一する
@@ -82,6 +87,54 @@ function formatUptime(seconds) {
  */
 function formatTime(date) {
   return date.toLocaleTimeString("ja-JP", { hour12: false });
+}
+
+/**
+ * /api/events のエントリ配列を <ul> 要素へ描画する共通ヘルパー
+ * (「エラー/警告」カードと「イベントログ」パネルの両方から使う --
+ * どちらも同じ /api/events を severity フィルタの有無だけ変えて呼ぶだけなので、
+ * 表示側も1つのレンダラを共有する)。DOM構築は innerHTML ではなく
+ * createElement/textContent で行う(サーバー側生成の文字列とはいえ、
+ * このプロジェクトの既存コードにも innerHTML への文字列連結は一切無い)。
+ * @param {HTMLElement} listEl
+ * @param {object[]} entries
+ */
+function renderLogEntries(listEl, entries) {
+  listEl.textContent = "";
+
+  if (!Array.isArray(entries) || entries.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "log-empty";
+    empty.textContent = "記録なし";
+    listEl.appendChild(empty);
+    return;
+  }
+
+  // 新しいものを上に表示する(取得順は古い→新しいなので逆順に並べる)
+  entries
+    .slice()
+    .reverse()
+    .forEach((entry) => {
+      const li = document.createElement("li");
+      li.className = `log-entry severity-${entry.severity || "info"}`;
+
+      const time = document.createElement("span");
+      time.className = "log-time";
+      time.textContent = entry.timestamp ? formatTime(new Date(entry.timestamp)) : "--";
+
+      const category = document.createElement("span");
+      category.className = "log-category";
+      category.textContent = entry.category || "";
+
+      const message = document.createElement("span");
+      message.className = "log-message";
+      message.textContent = entry.message || "";
+
+      li.appendChild(time);
+      li.appendChild(category);
+      li.appendChild(message);
+      listEl.appendChild(li);
+    });
 }
 
 /**
@@ -324,6 +377,32 @@ async function fetchHistory() {
 }
 
 /**
+ * /api/events を2通りの絞り込みで取得し、「エラー/警告」カードと
+ * 「イベントログ」パネルの両方を更新する。severity=warning,error の絞り込みが
+ * 「エラー/警告」表示そのもの(専用の /api/errors は存在しない、
+ * OBSERVABILITY_PLAN.md参照)。取得失敗時は他の致命的でない取得と同様、
+ * 既存表示を維持して黙って諦める。
+ */
+async function fetchEvents() {
+  const [errorsResult, allResult] = await Promise.allSettled([
+    fetch(`${EVENTS_ENDPOINT}?severity=warning,error&limit=10`).then((r) =>
+      r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))
+    ),
+    fetch(`${EVENTS_ENDPOINT}?limit=50`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+  ]);
+
+  if (errorsResult.status === "fulfilled" && errorsResult.value.status === "ok") {
+    const data = errorsResult.value.data;
+    elements.errorsCount.textContent = String(data.length);
+    renderLogEntries(elements.errorsList, data);
+  }
+
+  if (allResult.status === "fulfilled" && allResult.value.status === "ok") {
+    renderLogEntries(elements.eventLogList, allResult.value.data);
+  }
+}
+
+/**
  * /api/system を取得してダッシュボードを更新する
  */
 async function fetchSystemInfo() {
@@ -355,3 +434,6 @@ setInterval(fetchSystemInfo, REFRESH_INTERVAL_MS);
 
 fetchHistory();
 setInterval(fetchHistory, REFRESH_INTERVAL_MS);
+
+fetchEvents();
+setInterval(fetchEvents, REFRESH_INTERVAL_MS);

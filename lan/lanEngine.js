@@ -17,6 +17,7 @@
 const EventEmitter = require("events");
 const lanScanner = require("./lanScanner");
 const deviceStore = require("./deviceStore");
+const eventLogStore = require("../monitor/eventLogStore");
 
 const DEFAULT_INTERVAL_MS = 120_000; // 2分
 
@@ -86,6 +87,7 @@ class LanEngine extends EventEmitter {
     } catch (error) {
       this.lastError = error.message || String(error);
       console.error("[lanEngine] scan error:", this.lastError);
+      eventLogStore.record({ category: "lan", severity: "error", message: `Scan error: ${this.lastError}` });
       if (this.listenerCount("error") > 0) {
         this.emit("error", error);
       }

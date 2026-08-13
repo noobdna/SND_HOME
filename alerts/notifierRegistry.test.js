@@ -16,6 +16,7 @@ const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 
 const notifierRegistry = require("./notifierRegistry");
+const eventLogStore = require("../monitor/eventLogStore");
 
 function fakeNotifier(name, overrides = {}) {
   return {
@@ -126,5 +127,12 @@ describe("dispatch()", () => {
 
     assert.equal(received.length, 1);
     assert.ok(loggedErrors.some((line) => /"failing-notifier" failed to notify: boom/.test(line)));
+
+    // 1チャンネルの失敗は他を止めない設計を反映し、severity は "error" ではなく
+    // "warning" で記録される(eventLogStore は共有シングルトンでリセットできない
+    // ため、このテストで登録した唯一の "failing-notifier" という名前で絞り込む)。
+    const logged = eventLogStore.getHistory({ category: ["notifier"], severity: ["warning"] });
+    const mine = logged.filter((e) => e.message.includes('"failing-notifier" failed to notify: boom'));
+    assert.equal(mine.length, 1);
   });
 });
