@@ -65,11 +65,17 @@ body {
 }
 
 .status-dot {
+  display: inline-block;
+  vertical-align: middle;
   width: 9px;
   height: 9px;
   border-radius: 50%;
   background-color: var(--text-secondary);
   transition: background-color 0.3s ease;
+}
+
+.info-label .status-dot {
+  margin-right: 6px;
 }
 
 .status-dot.online {
