@@ -520,8 +520,15 @@ async function fetchServiceStatus() {
   }
 
   if (lanResult.status === "fulfilled") {
-    const { running, onlineCount } = lanResult.value;
-    const text = typeof onlineCount === "number" ? `稼働中 (${onlineCount}台)` : "稼働中";
+    // 表示は onlineCount(直近スキャンの生検出IP数)ではなく knownTerminalCount
+    // (lan/deviceStore.js の手動MAC端末集約後の件数、lan/lanEngine.js の
+    // getStatus() に既存。バックエンド/集計ロジックの変更はゼロ、この行の
+    // 表示切り替えのみ)を使う -- 同一端末の複数NIC(Wi-Fi+有線)を二重に
+    // 数えないぶん、実態の「接続端末数」に近い。手動グルーピングを一度も
+    // 使っていない場合は knownDeviceCount と同じ値になるため、この変更は
+    // 既存の表示と乖離しない(グルーピングを使って初めて数字が変わる)。
+    const { running, knownTerminalCount } = lanResult.value;
+    const text = typeof knownTerminalCount === "number" ? `稼働中 (${knownTerminalCount}台)` : "稼働中";
     setServiceRow(elements.lanStatusDot, elements.lanStatusValue, Boolean(running), text);
   } else {
     setServiceRowError(elements.lanStatusDot, elements.lanStatusValue);
