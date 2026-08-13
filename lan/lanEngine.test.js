@@ -14,6 +14,7 @@ const assert = require("node:assert/strict");
 
 const lanScanner = require("./lanScanner");
 const deviceStore = require("./deviceStore");
+const eventLogStore = require("../monitor/eventLogStore");
 const { LanEngine, startLanScanning, stopLanScanning, getLatestScan, getStatus } = require("./lanEngine");
 
 const originalScan = lanScanner.scan;
@@ -153,18 +154,24 @@ describe("LanEngine (fresh instance per test)", () => {
     await wait();
     assert.deepEqual(engine.getLatestScan(), scanned);
 
-    // 2回目のtickでスキャンが失敗するよう差し替える
+    // 2回目のtickでスキャンが失敗するよう差し替える(このテスト固有のエラー文言 --
+    // eventLogStore は共有シングルトンでリセットできないため、message で絞り込む)
     lanScanner.scan = async () => {
-      throw new Error("ping binary not found");
+      throw new Error("ping binary not found (lanEngine test)");
     };
     const errors = [];
     engine.on("error", (err) => errors.push(err));
     await engine.tick();
 
     assert.equal(errors.length, 1);
-    assert.match(errors[0].message, /ping binary not found/);
+    assert.match(errors[0].message, /ping binary not found \(lanEngine test\)/);
     // 失敗しても直前のキャッシュはそのまま残る(古い値を握りつぶさない)
     assert.deepEqual(engine.getLatestScan(), scanned);
+
+    const logged = eventLogStore.getHistory({ category: ["lan"], severity: ["error"] });
+    const mine = logged.filter((e) => e.message.includes("ping binary not found (lanEngine test)"));
+    assert.equal(mine.length, 1);
+
     engine.stop();
   });
 

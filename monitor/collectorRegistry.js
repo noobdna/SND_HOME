@@ -8,6 +8,7 @@ const memoryCollector = require("../collectors/memoryCollector");
 const diskCollector = require("../collectors/diskCollector");
 const networkCollector = require("../collectors/networkCollector");
 const lanCollector = require("../collectors/lanCollector");
+const connectionsCollector = require("../collectors/connectionsCollector");
 
 /**
  * register()/collectAll() のペアを、それぞれ独立した Collector 配列を持つ
@@ -74,6 +75,10 @@ defaultRegistry.register(networkCollector);
 // 保たれる(collectors/networkCollector.js が rxBytes/txBytes を追加した際の
 // 既存方針と同じ)。
 defaultRegistry.register(lanCollector);
+// middleware/requestTracker.js が /api にマウントされていない限り(server.js
+// 側の配線待ちの場合)、activeCount/totalRequestsServed は常に0のまま返る --
+// lanCollector 冒頭コメントと同じグレースフルデグレード。
+defaultRegistry.register(connectionsCollector);
 
 module.exports = {
   register: defaultRegistry.register,

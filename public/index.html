@@ -96,6 +96,63 @@
           <span class="info-value" id="lanStatusValue">--</span>
         </div>
       </div>
+
+      <!-- Errors / Warnings -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">エラー/警告</span>
+          <span class="card-value" id="errorsCount">--</span>
+        </div>
+        <ul class="log-list log-list-compact" id="errorsList">
+          <li class="log-empty">記録なし</li>
+        </ul>
+      </div>
+
+      <!-- Auth Events -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">認証イベント</span>
+          <span class="card-value" id="authEnforcedValue">--</span>
+        </div>
+        <ul class="log-list log-list-compact" id="authEventsList">
+          <li class="log-empty">記録なし</li>
+        </ul>
+      </div>
+
+      <!-- Current Connections -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">現在の接続数</span>
+          <span class="card-value" id="connectionsCurrent">--</span>
+        </div>
+        <div class="card-sub" id="connectionsSub">直近1分: -- リクエスト</div>
+      </div>
+
+      <!-- Source IPs -->
+      <div class="card card-info">
+        <div class="card-header">
+          <span class="card-title">接続元IP一覧</span>
+        </div>
+        <ul class="log-list log-list-compact" id="sourceIpList">
+          <li class="log-empty">記録なし</li>
+        </ul>
+      </div>
+
+      <!-- Raspberry Pi Status -->
+      <div class="card card-info">
+        <div class="info-row">
+          <span class="info-label"><span class="status-dot" id="piStatusDot"></span> Raspberry Pi</span>
+          <span class="info-value" id="piStatusValue">--</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">IPアドレス</span>
+          <span class="info-value" id="piIpAddress">--</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">最終確認</span>
+          <span class="info-value" id="piLastSeenAt">--</span>
+        </div>
+      </div>
     </section>
 
     <section class="chart-section">
@@ -136,6 +193,27 @@
             <span class="legend-item"><span class="legend-dot legend-tx"></span>送信</span>
           </div>
         </div>
+
+        <div class="card chart-card">
+          <div class="card-header">
+            <span class="card-title">接続数の推移</span>
+            <span class="card-value" id="connectionsHistoryValue">--</span>
+          </div>
+          <canvas class="chart-canvas" id="connectionsChart" width="640" height="120"></canvas>
+          <div class="chart-legend">
+            <span class="legend-item"><span class="legend-dot legend-rx"></span>現在の接続数</span>
+            <span class="legend-item"><span class="legend-dot legend-tx"></span>直近1分のリクエスト数</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="log-section">
+      <h2 class="section-title">イベントログ</h2>
+      <div class="card">
+        <ul class="log-list" id="eventLogList">
+          <li class="log-empty">記録なし</li>
+        </ul>
       </div>
     </section>
   </main>

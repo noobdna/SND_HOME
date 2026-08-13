@@ -7,6 +7,10 @@ const HISTORY_ENDPOINT = "/api/system/history";
 const MONITOR_STATUS_ENDPOINT = "/api/monitor/status";
 const ALERTS_STATUS_ENDPOINT = "/api/alerts/engine/status";
 const LAN_STATUS_ENDPOINT = "/api/lan/status";
+const EVENTS_ENDPOINT = "/api/events";
+const AUTH_STATUS_ENDPOINT = "/api/auth/status";
+const CONNECTIONS_SOURCES_ENDPOINT = "/api/connections/sources";
+const PI_STATUS_ENDPOINT = "/api/pi-status";
 
 // DOM要素の参照をキャッシュ
 const elements = {
@@ -46,6 +50,25 @@ const elements = {
   diskHistoryValue: document.getElementById("diskHistoryValue"),
   netChart: document.getElementById("netChart"),
   netHistoryValue: document.getElementById("netHistoryValue"),
+
+  errorsCount: document.getElementById("errorsCount"),
+  errorsList: document.getElementById("errorsList"),
+  eventLogList: document.getElementById("eventLogList"),
+
+  authEnforcedValue: document.getElementById("authEnforcedValue"),
+  authEventsList: document.getElementById("authEventsList"),
+
+  connectionsCurrent: document.getElementById("connectionsCurrent"),
+  connectionsSub: document.getElementById("connectionsSub"),
+  sourceIpList: document.getElementById("sourceIpList"),
+
+  connectionsChart: document.getElementById("connectionsChart"),
+  connectionsHistoryValue: document.getElementById("connectionsHistoryValue"),
+
+  piStatusDot: document.getElementById("piStatusDot"),
+  piStatusValue: document.getElementById("piStatusValue"),
+  piIpAddress: document.getElementById("piIpAddress"),
+  piLastSeenAt: document.getElementById("piLastSeenAt"),
 };
 
 // チャートの色はCSSカスタムプロパティ(テーマ)から取得し、既存の配色と統一する
@@ -92,6 +115,95 @@ function formatUptime(seconds) {
  */
 function formatTime(date) {
   return date.toLocaleTimeString("ja-JP", { hour12: false });
+}
+
+/**
+ * /api/events のエントリ配列を <ul> 要素へ描画する共通ヘルパー
+ * (「エラー/警告」カードと「イベントログ」パネルの両方から使う --
+ * どちらも同じ /api/events を severity フィルタの有無だけ変えて呼ぶだけなので、
+ * 表示側も1つのレンダラを共有する)。DOM構築は innerHTML ではなく
+ * createElement/textContent で行う(サーバー側生成の文字列とはいえ、
+ * このプロジェクトの既存コードにも innerHTML への文字列連結は一切無い)。
+ * @param {HTMLElement} listEl
+ * @param {object[]} entries
+ */
+function renderLogEntries(listEl, entries) {
+  listEl.textContent = "";
+
+  if (!Array.isArray(entries) || entries.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "log-empty";
+    empty.textContent = "記録なし";
+    listEl.appendChild(empty);
+    return;
+  }
+
+  // 新しいものを上に表示する(取得順は古い→新しいなので逆順に並べる)
+  entries
+    .slice()
+    .reverse()
+    .forEach((entry) => {
+      const li = document.createElement("li");
+      li.className = `log-entry severity-${entry.severity || "info"}`;
+
+      const time = document.createElement("span");
+      time.className = "log-time";
+      time.textContent = entry.timestamp ? formatTime(new Date(entry.timestamp)) : "--";
+
+      const category = document.createElement("span");
+      category.className = "log-category";
+      category.textContent = entry.category || "";
+
+      const message = document.createElement("span");
+      message.className = "log-message";
+      message.textContent = entry.message || "";
+
+      li.appendChild(time);
+      li.appendChild(category);
+      li.appendChild(message);
+      listEl.appendChild(li);
+    });
+}
+
+/**
+ * /api/connections/sources のエントリ配列(IP・リクエスト数・最終アクセス時刻)を
+ * <ul> 要素へ描画する。renderLogEntries() とは列の形が異なる(severity/category/
+ * messageではなくip/requestCount/lastSeenAt)ため、専用のレンダラとする。
+ * @param {HTMLElement} listEl
+ * @param {object[]} sources
+ */
+function renderSourceIps(listEl, sources) {
+  listEl.textContent = "";
+
+  if (!Array.isArray(sources) || sources.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "log-empty";
+    empty.textContent = "記録なし";
+    listEl.appendChild(empty);
+    return;
+  }
+
+  sources.forEach((source) => {
+    const li = document.createElement("li");
+    li.className = "log-entry";
+
+    const ip = document.createElement("span");
+    ip.className = "log-message";
+    ip.textContent = source.ip || "--";
+
+    const count = document.createElement("span");
+    count.className = "log-category";
+    count.textContent = `${source.requestCount}件`;
+
+    const lastSeen = document.createElement("span");
+    lastSeen.className = "log-time";
+    lastSeen.textContent = source.lastSeenAt ? formatTime(new Date(source.lastSeenAt)) : "--";
+
+    li.appendChild(ip);
+    li.appendChild(count);
+    li.appendChild(lastSeen);
+    listEl.appendChild(li);
+  });
 }
 
 /**
@@ -204,6 +316,14 @@ function renderSystemInfo(data) {
   elements.ipAddress.textContent = extractLocalIp(data.network);
   elements.uptime.textContent = formatUptime(data.uptime);
   elements.lastUpdated.textContent = formatTime(new Date());
+
+  // Current Connections (collectors/connectionsCollector.js 経由で /api/system に
+  // 自動的に載る -- 他のCollectorと同じ「新規エンドポイント不要」パターン)
+  const connCurrent = data.connections && typeof data.connections.current === "number" ? data.connections.current : "--";
+  const connLastMinute =
+    data.connections && typeof data.connections.requestsLastMinute === "number" ? data.connections.requestsLastMinute : "--";
+  elements.connectionsCurrent.textContent = String(connCurrent);
+  elements.connectionsSub.textContent = `直近1分: ${connLastMinute} リクエスト`;
 }
 
 /**
@@ -336,6 +456,19 @@ function renderCharts(history) {
     { min: 0 }
   );
   elements.netHistoryValue.textContent = `↓ ${formatRate(latestRx)}  ↑ ${formatRate(latestTx)}`;
+
+  const connCurrentValues = history.map((h) => (h.connections ? h.connections.current : null));
+  const connLastMinuteValues = history.map((h) => (h.connections ? h.connections.requestsLastMinute : null));
+  drawLineChart(
+    elements.connectionsChart,
+    [
+      { values: connCurrentValues, color: chartColors.accent },
+      { values: connLastMinuteValues, color: chartColors.green },
+    ],
+    { min: 0 }
+  );
+  const latestConnCurrent = connCurrentValues[connCurrentValues.length - 1];
+  elements.connectionsHistoryValue.textContent = typeof latestConnCurrent === "number" ? String(latestConnCurrent) : "--";
 }
 
 /**
@@ -396,6 +529,109 @@ async function fetchServiceStatus() {
 }
 
 /**
+ * /api/events を複数の絞り込みで取得し、「エラー/警告」「認証イベント」
+ * 「イベントログ」の3枠を更新する。severity=warning,error の絞り込みが
+ * 「エラー/警告」表示そのもの、category=auth の絞り込みが「認証イベント」
+ * 表示そのもの(専用の /api/errors・/api/auth/events は存在しない、
+ * OBSERVABILITY_PLAN.md参照)。/api/auth/status の enforced は、API_KEY未設定時
+ * (チェック自体が発生しない)にイベントを記録しない代わりに見せる静的フィールド。
+ * 取得失敗時は他の致命的でない取得と同様、既存表示を維持して黙って諦める。
+ */
+async function fetchEvents() {
+  const [errorsResult, allResult, authEventsResult, authStatusResult] = await Promise.allSettled([
+    fetch(`${EVENTS_ENDPOINT}?severity=warning,error&limit=10`).then((r) =>
+      r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))
+    ),
+    fetch(`${EVENTS_ENDPOINT}?limit=50`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+    fetch(`${EVENTS_ENDPOINT}?category=auth&limit=10`).then((r) =>
+      r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))
+    ),
+    fetch(AUTH_STATUS_ENDPOINT).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+  ]);
+
+  if (errorsResult.status === "fulfilled" && errorsResult.value.status === "ok") {
+    const data = errorsResult.value.data;
+    elements.errorsCount.textContent = String(data.length);
+    renderLogEntries(elements.errorsList, data);
+  }
+
+  if (allResult.status === "fulfilled" && allResult.value.status === "ok") {
+    renderLogEntries(elements.eventLogList, allResult.value.data);
+  }
+
+  if (authEventsResult.status === "fulfilled" && authEventsResult.value.status === "ok") {
+    renderLogEntries(elements.authEventsList, authEventsResult.value.data);
+  }
+
+  if (authStatusResult.status === "fulfilled") {
+    elements.authEnforcedValue.textContent = authStatusResult.value.enforced ? "有効" : "無効";
+  }
+}
+
+/**
+ * /api/connections/sources を取得して「接続元IP一覧」カードを更新する。
+ * current/requestsLastMinute 自体は /api/system(collectors/connectionsCollector.js
+ * 経由)から renderSystemInfo() が既に反映しているため、ここではIP一覧のみを扱う。
+ */
+async function fetchConnectionSources() {
+  try {
+    const response = await fetch(`${CONNECTIONS_SOURCES_ENDPOINT}?limit=20`);
+    if (!response.ok) return;
+
+    const json = await response.json();
+    if (json.status !== "ok") return;
+
+    renderSourceIps(elements.sourceIpList, json.data);
+  } catch (error) {
+    // ネットワーク断などでも致命的ではないため無視する
+  }
+}
+
+/**
+ * /api/pi-status を取得して「Raspberry Pi」カードを更新する。
+ * PI_MONITOR_MAC 未設定(configured:false)の場合は「未設定」と表示する --
+ * lan/deviceStore.js の既存スキャン結果を再利用するだけで、新規のping/SSH等の
+ * ポーリングはここでも一切行わない(OBSERVABILITY_PLAN.mdで確認済みの方針)。
+ * setServiceRow/setServiceRowError は「SNDサービス状態」カードで既に使っている
+ * dot+valueの共通ヘルパーをそのまま再利用する。
+ */
+async function fetchPiStatus() {
+  try {
+    const response = await fetch(PI_STATUS_ENDPOINT);
+    if (!response.ok) {
+      setServiceRowError(elements.piStatusDot, elements.piStatusValue);
+      elements.piIpAddress.textContent = "--";
+      elements.piLastSeenAt.textContent = "--";
+      return;
+    }
+
+    const data = await response.json();
+    if (!data.configured) {
+      elements.piStatusDot.classList.remove("online", "offline");
+      elements.piStatusValue.textContent = "未設定";
+      elements.piIpAddress.textContent = "--";
+      elements.piLastSeenAt.textContent = "--";
+      return;
+    }
+
+    if (!data.found) {
+      elements.piStatusDot.classList.remove("online");
+      elements.piStatusDot.classList.add("offline");
+      elements.piStatusValue.textContent = "未検出";
+      elements.piIpAddress.textContent = "--";
+      elements.piLastSeenAt.textContent = "--";
+      return;
+    }
+
+    setServiceRow(elements.piStatusDot, elements.piStatusValue, Boolean(data.online), "オンライン");
+    elements.piIpAddress.textContent = data.ip || "--";
+    elements.piLastSeenAt.textContent = data.lastSeenAt ? formatTime(new Date(data.lastSeenAt)) : "--";
+  } catch (error) {
+    setServiceRowError(elements.piStatusDot, elements.piStatusValue);
+  }
+}
+
+/**
  * /api/system を取得してダッシュボードを更新する
  */
 async function fetchSystemInfo() {
@@ -430,3 +666,12 @@ setInterval(fetchHistory, REFRESH_INTERVAL_MS);
 
 fetchServiceStatus();
 setInterval(fetchServiceStatus, REFRESH_INTERVAL_MS);
+
+fetchEvents();
+setInterval(fetchEvents, REFRESH_INTERVAL_MS);
+
+fetchConnectionSources();
+setInterval(fetchConnectionSources, REFRESH_INTERVAL_MS);
+
+fetchPiStatus();
+setInterval(fetchPiStatus, REFRESH_INTERVAL_MS);

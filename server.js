@@ -6,6 +6,11 @@ const monitorRoutes = require("./routes/monitor");
 const alertsRoutes = require("./routes/alerts");
 const notifiersRoutes = require("./routes/notifiers");
 const lanRoutes = require("./routes/lan");
+const eventsRoutes = require("./routes/events");
+const authRoutes = require("./routes/auth");
+const connectionsRoutes = require("./routes/connections");
+const piStatusRoutes = require("./routes/piStatus");
+const { trackRequests } = require("./middleware/requestTracker");
 const { startMonitoring, stopMonitoring } = require("./monitor/monitorEngine");
 const { start: startAlerting, stop: stopAlerting } = require("./alerts/alertEngine");
 const { startLanScanning, stopLanScanning } = require("./lan/lanEngine");
@@ -24,11 +29,20 @@ app.get("/", (req, res) => {
   res.send("🚀 SND@HOME 起動成功");
 });
 
+// requestTracker は /api 配下のみ対象(静的ファイル配信は対象外) --
+// OBSERVABILITY_PLAN.mdで確認済みの「現在の接続数」の定義。他の /api/*
+// ルートより前にマウントし、各ルートのレスポンス完了(res 'finish'/'close')を
+// 取りこぼさないようにする。
+app.use("/api", trackRequests);
 app.use("/api", systemRoutes);
 app.use("/api/monitor", monitorRoutes);
 app.use("/api/alerts", alertsRoutes);
 app.use("/api/notifiers", notifiersRoutes);
 app.use("/api/lan", lanRoutes);
+app.use("/api/events", eventsRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/connections", connectionsRoutes);
+app.use("/api/pi-status", piStatusRoutes);
 
 // ---------------------------------------------------------
 // サーバー起動

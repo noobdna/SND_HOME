@@ -18,6 +18,10 @@ function extractMetrics(snapshot) {
       rxBytes: snapshot.network ? snapshot.network.rxBytes : null,
       txBytes: snapshot.network ? snapshot.network.txBytes : null,
     },
+    connections: {
+      current: snapshot.connections ? snapshot.connections.current : null,
+      requestsLastMinute: snapshot.connections ? snapshot.connections.requestsLastMinute : null,
+    },
   };
 }
 
