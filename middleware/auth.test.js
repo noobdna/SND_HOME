@@ -9,9 +9,21 @@ const request = require("supertest");
 const express = require("express");
 
 const { requireAuth } = require("./auth");
+const eventLogStore = require("../monitor/eventLogStore");
 
 const app = express();
 app.get("/protected", requireAuth, (req, res) => res.json({ status: "ok" }));
+
+/**
+ * eventLogStore は共有シングルトンでリセットできない(alerts/alertHistoryStore.js
+ * と同じ規約)。このファイル内のテストは順番に実行される(node:test はファイル内
+ * デフォルトで直列)ため、"category: auth" に絞った履歴の**末尾**が「直前の
+ * リクエストで記録されたはずのイベント」だと仮定できる。
+ */
+function lastAuthEvent() {
+  const history = eventLogStore.getHistory({ category: ["auth"] });
+  return history[history.length - 1];
+}
 
 afterEach(() => {
   delete process.env.API_KEY;
@@ -59,5 +71,53 @@ describe("requireAuth", () => {
     process.env.API_KEY = "secret-token";
     const res = await request(app).get("/protected").set("Authorization", "Bearer short");
     assert.equal(res.status, 401);
+  });
+});
+
+describe("requireAuth -- eventLogStore integration", () => {
+  it("does not record any auth event when API_KEY is unset (pass-through, no check performed)", async () => {
+    delete process.env.API_KEY;
+    const before = eventLogStore.getHistory({ category: ["auth"] }).length;
+
+    await request(app).get("/protected");
+
+    assert.equal(eventLogStore.getHistory({ category: ["auth"] }).length, before);
+  });
+
+  it("records a warning event on auth failure", async () => {
+    process.env.API_KEY = "secret-token";
+    await request(app).get("/protected").set("Authorization", "Bearer wrong-token");
+
+    const entry = lastAuthEvent();
+    assert.equal(entry.category, "auth");
+    assert.equal(entry.severity, "warning");
+    assert.equal(entry.message, "Authentication failed");
+    assert.equal(entry.meta.path, "/protected");
+    assert.equal(entry.meta.method, "GET");
+  });
+
+  it("records an info event on auth success", async () => {
+    process.env.API_KEY = "secret-token";
+    await request(app).get("/protected").set("Authorization", "Bearer secret-token");
+
+    const entry = lastAuthEvent();
+    assert.equal(entry.category, "auth");
+    assert.equal(entry.severity, "info");
+    assert.equal(entry.message, "Authenticated request");
+    assert.equal(entry.meta.path, "/protected");
+    assert.equal(entry.meta.method, "GET");
+  });
+
+  it("CRITICAL: never records the raw token or API_KEY value, on either success or failure", async () => {
+    process.env.API_KEY = "super-secret-value-12345";
+
+    await request(app).get("/protected").set("Authorization", "Bearer super-secret-value-12345"); // success
+    const successEntry = lastAuthEvent();
+    assert.ok(!JSON.stringify(successEntry).includes("super-secret-value-12345"));
+
+    await request(app).get("/protected").set("Authorization", "Bearer wrong-guess-98765"); // failure
+    const failureEntry = lastAuthEvent();
+    assert.ok(!JSON.stringify(failureEntry).includes("super-secret-value-12345"));
+    assert.ok(!JSON.stringify(failureEntry).includes("wrong-guess-98765"));
   });
 });

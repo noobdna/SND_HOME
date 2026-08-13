@@ -15,6 +15,7 @@
 // 読む」規約と同じで、これによりテストが beforeEach/afterEach で process.env を
 // 差し替えても正しく反映される。
 const crypto = require("crypto");
+const eventLogStore = require("../monitor/eventLogStore");
 
 // 単純な `token !== apiKey`(文字列の厳密不等価)は、最初に異なるバイトが
 // 見つかった時点で処理を打ち切る非定数時間比較 — API_KEY をこのサーバー
@@ -35,6 +36,13 @@ function safeCompare(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+// OBSERVABILITY_PLAN.md で確認済みの方針: API_KEY 未設定時(下の早期return)は
+// 実際にはチェックが一切発生していないため、イベントログには何も記録しない
+// -- 「成功」として記録すると、チェックが行われたかのように誤って見えてしまう。
+// 認証が有効かどうか自体は routes/auth.js の GET /api/auth/status
+// (`enforced: Boolean(process.env.API_KEY)`)という別の静的フィールドで見せる。
+// meta には ip/path/method のみを記録し、トークンや API_KEY の値そのものは
+// 絶対に含めない(このファイルの他のどこにもログ出力していないのと同じ理由)。
 function requireAuth(req, res, next) {
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
@@ -47,11 +55,15 @@ function requireAuth(req, res, next) {
 
   const header = req.get("Authorization") || "";
   const [scheme, token] = header.split(" ");
+  const meta = { ip: req.ip, path: req.originalUrl, method: req.method };
+
   if (scheme !== "Bearer" || typeof token !== "string" || !safeCompare(token, apiKey)) {
+    eventLogStore.record({ category: "auth", severity: "warning", message: "Authentication failed", meta });
     res.status(401).json({ status: "error", message: "Unauthorized" });
     return;
   }
 
+  eventLogStore.record({ category: "auth", severity: "info", message: "Authenticated request", meta });
   next();
 }
 
