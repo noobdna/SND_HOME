@@ -14,6 +14,7 @@
 // 引き続き見える — 台帳(永続履歴)に載らないだけ。
 const fs = require("fs");
 const path = require("path");
+const { computeIdentityConfidence } = require("./identityConfidence");
 
 const NICKNAME_MAX_LENGTH = 100;
 
@@ -81,7 +82,7 @@ function recordScan(scanResult) {
     seenMacs.add(mac);
 
     const existing = devices.get(mac);
-    devices.set(mac, {
+    const updated = {
       mac,
       ip: scanned.ip,
       vendor: scanned.vendor,
@@ -92,7 +93,15 @@ function recordScan(scanResult) {
       inArpTable: Boolean(scanned.inArpTable),
       firstSeenAt: existing ? existing.firstSeenAt : scanResult.scannedAt,
       lastSeenAt: scanResult.scannedAt,
-    });
+    };
+    // Phase 52: classification only (low/medium/high), computed from
+    // this record's own existing fields (nickname/terminalId/
+    // firstSeenAt) plus lan/ouiLookup.js's existing vendor resolution
+    // -- no new persistent state (e.g. no IP-change history), never
+    // wired to isolation/blocking/recovery/any /operate/* path. See
+    // lan/identityConfidence.js's own header for the full rationale.
+    updated.identity_confidence = computeIdentityConfidence(updated);
+    devices.set(mac, updated);
     upserted++;
   }
 
@@ -154,6 +163,11 @@ function setNickname(mac, nickname) {
 
   const normalized = nickname === null ? null : nickname.trim();
   const updated = { ...existing, nickname: normalized };
+  // Recompute: nickname is one of computeIdentityConfidence()'s own
+  // inputs (the "reviewed" signal) -- without this, identity_confidence
+  // would stay stale until the next scan tick (up to 2 minutes) instead
+  // of reflecting this change immediately.
+  updated.identity_confidence = computeIdentityConfidence(updated);
   devices.set(mac, updated);
   persist();
   return cloneDevice(updated);
@@ -192,6 +206,11 @@ function groupTerminal(mac, primaryMac) {
   }
 
   const updated = { ...existing, terminalId: primaryMac };
+  // Recompute: terminalId feeds both the "reviewed" and the stronger
+  // "stronglyReviewed" signal in computeIdentityConfidence() -- same
+  // staleness reasoning as setNickname() above. Covers ungroupTerminal()
+  // too, since it's implemented as groupTerminal(mac, null).
+  updated.identity_confidence = computeIdentityConfidence(updated);
   devices.set(mac, updated);
   persist();
   return cloneDevice(updated);
