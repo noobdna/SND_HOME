@@ -78,11 +78,12 @@
         </div>
       </div>
 
-      <!-- SND Service Status -->
-      <div class="card">
+      <!-- 1. 現在の状態 (Monitor/Alerts/LAN Scanの一次情報 = lastError/activeAlertsCount) -->
+      <div class="card card-tier-current">
         <div class="card-header">
-          <span class="card-title">SNDサービス状態</span>
+          <span class="card-title">① 現在の状態</span>
         </div>
+        <div class="card-sub">今アクティブな異常のみ（各サービスの直近の処理結果が根拠。過去のエラーはここに残らない）</div>
         <div class="info-row">
           <span class="info-label"><span class="status-dot" id="monitorStatusDot"></span> Monitor</span>
           <span class="info-value" id="monitorStatusValue">--</span>
@@ -97,13 +98,26 @@
         </div>
       </div>
 
-      <!-- Errors / Warnings -->
-      <div class="card">
+      <!-- 2. 履歴 (直近30日。期限切れは自動でArchiveへ移動済みのためここには出てこない) -->
+      <div class="card card-tier-history">
         <div class="card-header">
-          <span class="card-title">エラー/警告</span>
+          <span class="card-title">② 履歴（エラー/警告）</span>
           <span class="card-value" id="errorsCount">--</span>
         </div>
+        <div class="card-sub">直近30日・最新10件（解決済みを含む。現在アクティブかどうかは上の「① 現在の状態」を参照）</div>
         <ul class="log-list log-list-compact" id="errorsList">
+          <li class="log-empty">記録なし</li>
+        </ul>
+      </div>
+
+      <!-- 3. 過去ログ / Archive (30日超。削除せず自動移動、検索可能) -->
+      <div class="card card-tier-archive">
+        <div class="card-header">
+          <span class="card-title">③ 過去ログ / Archive</span>
+          <span class="card-value" id="archiveCount">--</span>
+        </div>
+        <div class="card-sub">30日を超えた記録の自動退避先（削除はしない）。最新10件を表示 / GET /api/events/archive で検索可能</div>
+        <ul class="log-list log-list-compact" id="archiveList">
           <li class="log-empty">記録なし</li>
         </ul>
       </div>
@@ -209,7 +223,7 @@
     </section>
 
     <section class="log-section">
-      <h2 class="section-title">イベントログ</h2>
+      <h2 class="section-title">② イベントログ（履歴・直近30日）</h2>
       <div class="card">
         <ul class="log-list" id="eventLogList">
           <li class="log-empty">記録なし</li>

@@ -107,4 +107,94 @@ describe("GET /api/events", () => {
     const mine = res.body.data.find((e) => e.message === message);
     assert.deepEqual(mine.meta, { ip: "203.0.113.5", path: "/api/lan/devices" });
   });
+
+  it("filters by ?from=&?to= (inclusive timestamp range)", async () => {
+    const message = uniqueMessage("from-to");
+    eventLogStore.record({ category: "monitor", severity: "info", message, timestamp: "2026-01-15T00:00:00.000Z" });
+
+    const inRange = await request(app).get(
+      "/api/events?limit=500&from=2026-01-01T00:00:00.000Z&to=2026-01-31T00:00:00.000Z",
+    );
+    assert.ok(inRange.body.data.some((e) => e.message === message));
+
+    const outOfRange = await request(app).get(
+      "/api/events?limit=500&from=2026-02-01T00:00:00.000Z&to=2026-02-28T00:00:00.000Z",
+    );
+    assert.ok(!outOfRange.body.data.some((e) => e.message === message));
+  });
+
+  it("filters by ?q= (case-insensitive substring match on message)", async () => {
+    const message = `Ping-timeout-${Math.random().toString(36).slice(2)}`;
+    eventLogStore.record({ category: "lan", severity: "warning", message });
+
+    const res = await request(app).get(`/api/events?limit=500&q=${encodeURIComponent(message.slice(0, 12).toLowerCase())}`);
+    assert.ok(res.body.data.some((e) => e.message === message));
+  });
+});
+
+describe("GET /api/events/archive", () => {
+  it("returns the envelope shape { status, count, data }", async () => {
+    const res = await request(app).get("/api/events/archive");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, "ok");
+    assert.equal(typeof res.body.count, "number");
+    assert.ok(Array.isArray(res.body.data));
+    assert.equal(res.body.count, res.body.data.length);
+  });
+
+  it("does not include an entry that is still within the history retention window", async () => {
+    const message = uniqueMessage("still-in-history");
+    eventLogStore.record({ category: "monitor", severity: "error", message });
+
+    const res = await request(app).get("/api/events/archive?limit=5000");
+    assert.ok(!res.body.data.some((e) => e.message === message));
+  });
+
+  it("includes an entry once it has been moved to the archive by archiveExpiredEntries()", async () => {
+    const message = uniqueMessage("moved-to-archive");
+    eventLogStore.record({ category: "lan", severity: "error", message, timestamp: "2020-01-01T00:00:00.000Z" });
+    eventLogStore.archiveExpiredEntries({ now: new Date("2026-09-02T00:00:00.000Z") });
+
+    const historyRes = await request(app).get("/api/events?limit=5000");
+    assert.ok(!historyRes.body.data.some((e) => e.message === message));
+
+    const archiveRes = await request(app).get("/api/events/archive?limit=5000");
+    assert.ok(archiveRes.body.data.some((e) => e.message === message));
+  });
+
+  it("supports the same ?severity=/?category=/?q= filters as GET /", async () => {
+    const message = uniqueMessage("archive-filter");
+    eventLogStore.record({ category: "notifier", severity: "error", message, timestamp: "2020-01-01T00:00:00.000Z" });
+    eventLogStore.archiveExpiredEntries({ now: new Date("2026-09-02T00:00:00.000Z") });
+
+    const res = await request(app).get(
+      `/api/events/archive?limit=5000&category=notifier&severity=error&q=${encodeURIComponent(message.slice(0, 15))}`,
+    );
+    assert.ok(res.body.data.some((e) => e.message === message));
+  });
+});
+
+describe("GET /api/events/summary", () => {
+  it("returns historyCount/archiveCount/retentionDays reflecting the live stores", async () => {
+    const res = await request(app).get("/api/events/summary");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, "ok");
+    assert.deepEqual(res.body.data, {
+      historyCount: eventLogStore.getHistory().length,
+      archiveCount: eventLogStore.getArchive().length,
+      retentionDays: 30,
+    });
+  });
+
+  it("reflects an entry moving from history to archive", async () => {
+    const message = uniqueMessage("summary-move");
+    eventLogStore.record({ category: "monitor", severity: "warning", message, timestamp: "2020-01-01T00:00:00.000Z" });
+
+    const before = await request(app).get("/api/events/summary");
+    eventLogStore.archiveExpiredEntries({ now: new Date("2026-09-02T00:00:00.000Z") });
+    const after = await request(app).get("/api/events/summary");
+
+    assert.equal(after.body.data.archiveCount, before.body.data.archiveCount + 1);
+    assert.equal(after.body.data.historyCount, before.body.data.historyCount - 1);
+  });
 });

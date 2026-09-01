@@ -215,6 +215,7 @@ describe("MonitorEngine (fresh instance per test)", () => {
         running: false,
         interval: 5000,
         lastUpdated: null,
+        lastError: null,
         uptime: 0,
       });
     });
@@ -230,9 +231,48 @@ describe("MonitorEngine (fresh instance per test)", () => {
       const status = engine.getStatus();
       assert.equal(status.running, true);
       assert.equal(status.interval, 45_000);
+      assert.equal(status.lastError, null);
       assert.ok(typeof status.lastUpdated === "string");
       assert.ok(status.uptime >= 0);
       engine.stop();
+    });
+
+    it("reports lastError after a failed tick, without clearing lastUpdated from an earlier success", async () => {
+      collectorRegistry.collectAll = async () => fakeSnapshot();
+      historyStore.record = () => {};
+
+      const engine = new MonitorEngine();
+      engine.start(999_999);
+      await wait();
+      const lastUpdatedAfterSuccess = engine.getStatus().lastUpdated;
+
+      collectorRegistry.collectAll = async () => {
+        throw new Error("boom");
+      };
+      engine.on("error", () => {});
+      await engine.tick();
+
+      const status = engine.getStatus();
+      assert.match(status.lastError, /boom/);
+      assert.equal(status.lastUpdated, lastUpdatedAfterSuccess);
+      engine.stop();
+    });
+
+    it("clears lastError after a subsequent successful tick", async () => {
+      collectorRegistry.collectAll = async () => {
+        throw new Error("boom");
+      };
+      historyStore.record = () => {};
+
+      const engine = new MonitorEngine();
+      engine.on("error", () => {});
+      await engine.tick();
+      assert.match(engine.getStatus().lastError, /boom/);
+
+      collectorRegistry.collectAll = async () => fakeSnapshot();
+      await engine.tick();
+
+      assert.equal(engine.getStatus().lastError, null);
     });
 
     it("uptime resets to 0 after stop()", async () => {

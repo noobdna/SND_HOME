@@ -8,6 +8,7 @@ const MONITOR_STATUS_ENDPOINT = "/api/monitor/status";
 const ALERTS_STATUS_ENDPOINT = "/api/alerts/engine/status";
 const LAN_STATUS_ENDPOINT = "/api/lan/status";
 const EVENTS_ENDPOINT = "/api/events";
+const EVENTS_ARCHIVE_ENDPOINT = "/api/events/archive";
 const AUTH_STATUS_ENDPOINT = "/api/auth/status";
 const CONNECTIONS_SOURCES_ENDPOINT = "/api/connections/sources";
 const PI_STATUS_ENDPOINT = "/api/pi-status";
@@ -54,6 +55,8 @@ const elements = {
   errorsCount: document.getElementById("errorsCount"),
   errorsList: document.getElementById("errorsList"),
   eventLogList: document.getElementById("eventLogList"),
+  archiveCount: document.getElementById("archiveCount"),
+  archiveList: document.getElementById("archiveList"),
 
   authEnforcedValue: document.getElementById("authEnforcedValue"),
   authEventsList: document.getElementById("authEventsList"),
@@ -298,6 +301,22 @@ function setServiceRowError(dotEl, valueEl) {
   valueEl.textContent = "--";
 }
 
+/**
+ * SNDサービス状態カードの1行分を「稼働はしているが直近の処理が失敗した」状態
+ * (例: lanEngine.getStatus().lastError が非null)にする。setServiceRowError()
+ * (ステータス自体が取得できない場合)とは別の状態 -- タイマーは動いている
+ * (running=true)ため「停止中」ではなく、かつ取得は成功しているため「--」でも
+ * ない、直近1回の処理結果としてのエラーを明示する。
+ * @param {HTMLElement} dotEl
+ * @param {HTMLElement} valueEl
+ * @param {string} text
+ */
+function setServiceRowIssue(dotEl, valueEl, text) {
+  dotEl.classList.remove("online", "offline");
+  dotEl.classList.add("offline");
+  valueEl.textContent = text;
+}
+
 function showError(message) {
   elements.errorBanner.textContent = `⚠ ${message}`;
   elements.errorBanner.hidden = false;
@@ -536,15 +555,32 @@ async function fetchServiceStatus() {
   ]);
 
   if (monitorResult.status === "fulfilled") {
-    setServiceRow(elements.monitorStatusDot, elements.monitorStatusValue, Boolean(monitorResult.value.running), "稼働中");
+    // lan/lanEngine.js の lastError と同じ理由で、Monitor行も直近tickの成否
+    // (monitorEngine.js の lastError、一次情報)を「現在の状態」として見る --
+    // running(タイマーが動いているか)だけでは、直近の収集が失敗し続けて
+    // いても「稼働中」としか出せない。
+    const { running, lastError } = monitorResult.value;
+    if (running && lastError) {
+      setServiceRowIssue(elements.monitorStatusDot, elements.monitorStatusValue, `エラー: ${lastError}`);
+    } else {
+      setServiceRow(elements.monitorStatusDot, elements.monitorStatusValue, Boolean(running), "稼働中");
+    }
   } else {
     setServiceRowError(elements.monitorStatusDot, elements.monitorStatusValue);
   }
 
   if (alertsResult.status === "fulfilled") {
-    const { running, rulesCount } = alertsResult.value;
-    const text = typeof rulesCount === "number" ? `稼働中 (${rulesCount}ルール)` : "稼働中";
-    setServiceRow(elements.alertsStatusDot, elements.alertsStatusValue, Boolean(running), text);
+    // activeAlertsCount(alerts/alertEngine.js getStatus()に既存の一次情報 --
+    // ruleEvaluator の状態機械上「現在OKではない」ルールの数)が、Alertsに
+    // とっての「今現在の異常」そのもの。エンジン自体が動いていても
+    // アクティブなアラートがあれば、それをここで明示する。
+    const { running, rulesCount, activeAlertsCount } = alertsResult.value;
+    if (running && activeAlertsCount > 0) {
+      setServiceRowIssue(elements.alertsStatusDot, elements.alertsStatusValue, `アラート発生中 (${activeAlertsCount}件)`);
+    } else {
+      const text = typeof rulesCount === "number" ? `稼働中 (${rulesCount}ルール)` : "稼働中";
+      setServiceRow(elements.alertsStatusDot, elements.alertsStatusValue, Boolean(running), text);
+    }
   } else {
     setServiceRowError(elements.alertsStatusDot, elements.alertsStatusValue);
   }
@@ -557,9 +593,19 @@ async function fetchServiceStatus() {
     // 数えないぶん、実態の「接続端末数」に近い。手動グルーピングを一度も
     // 使っていない場合は knownDeviceCount と同じ値になるため、この変更は
     // 既存の表示と乖離しない(グルーピングを使って初めて数字が変わる)。
-    const { running, knownTerminalCount } = lanResult.value;
-    const text = typeof knownTerminalCount === "number" ? `稼働中 (${knownTerminalCount}台)` : "稼働中";
-    setServiceRow(elements.lanStatusDot, elements.lanStatusValue, Boolean(running), text);
+    const { running, knownTerminalCount, lastError } = lanResult.value;
+    // lastError は「直近1回のスキャン」の結果(lan/lanEngine.js tick() 参照)、
+    // つまり現在アクティブな問題の唯一の一次情報源 -- 下の「エラー/警告」
+    // カードは過去の履歴(eventLogStore、解決済みでも残り続ける)であり、
+    // これと混同されないよう、"現在" の状態はこの行(サービス状態)側で
+    // running とは独立に表示する(running=true でも直近スキャンが失敗して
+    // いれば、稼働中の文言ではなくエラー内容を出す)。
+    if (running && lastError) {
+      setServiceRowIssue(elements.lanStatusDot, elements.lanStatusValue, `エラー: ${lastError}`);
+    } else {
+      const text = typeof knownTerminalCount === "number" ? `稼働中 (${knownTerminalCount}台)` : "稼働中";
+      setServiceRow(elements.lanStatusDot, elements.lanStatusValue, Boolean(running), text);
+    }
   } else {
     setServiceRowError(elements.lanStatusDot, elements.lanStatusValue);
   }
@@ -602,6 +648,29 @@ async function fetchEvents() {
 
   if (authStatusResult.status === "fulfilled") {
     elements.authEnforcedValue.textContent = authStatusResult.value.enforced ? "有効" : "無効";
+  }
+}
+
+/**
+ * 「③ 過去ログ / Archive」カードを更新する。/api/events/archive は
+ * monitor/eventLogStore.js の archiveStore(履歴の保持期間 30日 を超えた
+ * イベントの退避先、削除はされない)を見るエンドポイントで、fetchEvents() が
+ * 見る /api/events(履歴・直近30日)とは完全に別のデータソース -- 「② 履歴」
+ * カードと同じ見た目(件数 + 直近10件のリスト)で揃えることで、Dashboard上
+ * でも「同じ形をした別の階層」であることが伝わるようにしている。
+ */
+async function fetchArchive() {
+  try {
+    const response = await fetch(`${EVENTS_ARCHIVE_ENDPOINT}?severity=warning,error&limit=10`);
+    if (!response.ok) return;
+
+    const json = await response.json();
+    if (json.status !== "ok") return;
+
+    elements.archiveCount.textContent = String(json.count);
+    renderLogEntries(elements.archiveList, json.data);
+  } catch (error) {
+    // ネットワーク断などでも致命的ではないため、他のfetchXと同様に無視する
   }
 }
 
@@ -725,6 +794,9 @@ setInterval(fetchServiceStatus, REFRESH_INTERVAL_MS);
 
 fetchEvents();
 setInterval(fetchEvents, REFRESH_INTERVAL_MS);
+
+fetchArchive();
+setInterval(fetchArchive, REFRESH_INTERVAL_MS);
 
 fetchConnectionSources();
 setInterval(fetchConnectionSources, REFRESH_INTERVAL_MS);

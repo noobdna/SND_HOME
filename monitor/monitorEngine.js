@@ -26,6 +26,13 @@ class MonitorEngine extends EventEmitter {
     this.latestSystemInfo = null;
     this.lastUpdated = null;
     this.startedAt = null;
+    // lan/lanEngine.js の lastError と同じ役割: 直近1回のtick()の成否そのもの
+    // (「現在アクティブな異常」の一次情報)。eventLogStore への記録は履歴として
+    // 別途残るが、あれは「過去に何が起きたか」の時系列ログであり、「今現在
+    // 異常が続いているか」を判定するための一次情報ではない -- この違いを
+    // Dashboard側で明示的に区別するために追加した(lastError は成功時に
+    // 必ず null へ戻る = 直前のtickが成功していれば「現在は正常」)。
+    this.lastError = null;
   }
 
   /**
@@ -38,11 +45,13 @@ class MonitorEngine extends EventEmitter {
       const data = await collectorRegistry.collectAll();
       this.latestSystemInfo = data;
       this.lastUpdated = new Date().toISOString();
+      this.lastError = null;
       historyStore.record(data);
       console.log("System cache updated");
       this.emit("update", data);
     } catch (error) {
       // Collectorが失敗してもプロセスは落とさず、直前のキャッシュを保持したまま次回ポーリングを継続する
+      this.lastError = error.message || String(error);
       console.error("Polling error:", error.message || error);
       eventLogStore.record({ category: "monitor", severity: "error", message: `Polling error: ${error.message || error}` });
       this.emit("error", error);
@@ -83,6 +92,7 @@ class MonitorEngine extends EventEmitter {
       running: this.timer !== null,
       interval: this.intervalMs,
       lastUpdated: this.lastUpdated,
+      lastError: this.lastError,
       uptime: this.startedAt ? Math.floor((Date.now() - this.startedAt) / 1000) : 0,
     };
   }

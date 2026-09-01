@@ -125,6 +125,22 @@ body {
   background-color: var(--bg-card-hover);
 }
 
+/* 3階層ログ(現在の状態/履歴/Archive)を色分けし、一目で区別できるようにする
+   -- 現在=アクセントカラー(最も目立たせる)、履歴=黄(注意はするが過去)、
+   Archive=グレー(参照用、目立たせすぎない) */
+.card-tier-current {
+  border-left: 3px solid var(--accent);
+}
+
+.card-tier-history {
+  border-left: 3px solid var(--yellow);
+}
+
+.card-tier-archive {
+  border-left: 3px solid var(--text-secondary);
+  opacity: 0.9;
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
