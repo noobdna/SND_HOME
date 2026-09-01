@@ -17,6 +17,15 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+// server.js loads .env via `require("dotenv").config()` (cwd-relative), which
+// happens to work under the documented crontab entry (`cd .../SND_HOME && ...`)
+// but silently doesn't if this script is ever invoked with a different cwd.
+// Resolve the path explicitly from __dirname instead, so PORT (and anything
+// else in .env) is read correctly regardless of the caller's cwd -- this was
+// the root cause of this script quietly checking the wrong port for however
+// long .env's PORT has differed from the 3000 default (see data/lan-status-check.log's
+// http_status=401 entries: those were a *different* app answering on 3000).
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const PORT = process.env.PORT || 3000;
 const LOG_PATH = process.env.LAN_STATUS_CHECK_LOG_PATH || path.join(__dirname, "..", "data", "lan-status-check.log");
